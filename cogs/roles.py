@@ -209,7 +209,7 @@ class Roles(commands.Cog):
         embed.add_field(name="Участник", value=member.mention, inline=True)
         embed.add_field(name="Доступных ролей", value=str(len(allowed)), inline=True)
         embed.set_footer(text="Первый список — выдать, второй — снять")
-        await interaction.response.send_message(embed=embed, view=RolePanelView(allowed, member))
+        await interaction.response.send_message(embed=embed, view=RolePanelView(allowed, member), ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
