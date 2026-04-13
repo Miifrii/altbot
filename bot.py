@@ -6,6 +6,7 @@ from config import TOKEN, PREFIX
 COGS = [
     "cogs.notes",
     "cogs.roles",
+    "cogs.reports",
 ]
 
 intents = discord.Intents.default()
@@ -17,7 +18,9 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     print(f"Бот запущен как {bot.user} (ID: {bot.user.id})")
-    synced = await bot.tree.sync()
+    guild = discord.Object(id=1348258341658562560)
+    bot.tree.copy_global_to(guild=guild)
+    synced = await bot.tree.sync(guild=guild)
     print(f"Синхронизировано slash-команд: {len(synced)}")
 
 
