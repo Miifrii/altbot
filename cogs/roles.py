@@ -177,7 +177,7 @@ class RoleSelect(discord.ui.Select):
 
 class RolePanelView(discord.ui.View):
     def __init__(self, allowed_roles: list[dict], target: discord.Member):
-        super().__init__(timeout=120)
+        super().__init__(timeout=20)
         self.add_item(RoleSelect(allowed_roles, target, "give"))
         self.add_item(RoleSelect(allowed_roles, target, "take"))
 
