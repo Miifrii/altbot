@@ -14,6 +14,9 @@ def build_ticket_embed(ticket_data: dict, status: str, assignee: discord.Member 
         embed.add_field(name="Описание", value=ticket_data["description"], inline=False)
     if ticket_data.get("details"):
         embed.add_field(name="Детали", value=ticket_data["details"], inline=False)
+    for label, value in ticket_data.get("form_fields", {}).items():
+        if value:
+            embed.add_field(name=label, value=value, inline=False)
     if assignee:
         embed.add_field(name="Ответственный", value=assignee.mention, inline=True)
     if ticket_data.get("avatar_url"):
