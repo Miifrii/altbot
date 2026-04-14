@@ -2,15 +2,17 @@ import asyncio
 import discord
 from discord.ext import commands
 from config import TOKEN, PREFIX
+from database import init_db, migrate_from_json
 
 COGS = [
-    "cogs.notes",
     "cogs.roles",
-    "cogs.reports",
+    "cogs.tickets.loader",
+    "cogs.utils",
 ]
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
@@ -18,14 +20,17 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     print(f"Бот запущен как {bot.user} (ID: {bot.user.id})")
-    guild = discord.Object(id=1348258341658562560)
-    bot.tree.copy_global_to(guild=guild)
-    synced = await bot.tree.sync(guild=guild)
-    print(f"Синхронизировано slash-команд: {len(synced)}")
+    for guild_id in [1348258341658562560, 635506631064551467]:
+        guild = discord.Object(id=guild_id)
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        print(f"Синхронизировано {len(synced)} команд для сервера {guild_id}")
 
 
 async def main():
     async with bot:
+        init_db()
+        migrate_from_json()
         for cog in COGS:
             await bot.load_extension(cog)
         await bot.start(TOKEN)

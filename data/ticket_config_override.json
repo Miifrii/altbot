@@ -1,0 +1,61 @@
+{
+  "log_channel_id": 1212427117967442030,
+  "panel_channel_id": 1233868620690489464,
+  "panel_message_id": 1493386946758578407,
+  "cooldown_seconds": 180,
+  "one_active_per_user": true,
+  "panel": {
+    "color": 10181046,
+    "banner_url": "",
+    "title": "🎫 Тикеты поддержки",
+    "description": "1",
+    "footer": "1"
+  },
+  "types": {
+    "complaint": {
+      "label": "Жалоба",
+      "emoji": "🚨",
+      "style": "secondary",
+      "description": "Пожаловаться на участника сервера за нарушение правил.",
+      "category_id": 1233868538867880016,
+      "role_id": 1338906772924268666,
+      "name_prefix": "жалоба"
+    },
+    "appeal": {
+      "label": "Обжалование",
+      "emoji": "⚖️",
+      "style": "secondary",
+      "description": "Обжаловать выданное наказание.",
+      "category_id": 1233868538867880016,
+      "role_id": 1338906772924268666,
+      "name_prefix": "обжалование"
+    },
+    "reschedule": {
+      "label": "Перенос времени",
+      "emoji": "🕐",
+      "style": "secondary",
+      "description": "Запросить перенос времени с другого сервера.",
+      "category_id": 1233868538867880016,
+      "role_id": 1338906772924268666,
+      "name_prefix": "перенос"
+    },
+    "verify": {
+      "label": "Верификация возраста",
+      "emoji": "🔞",
+      "style": "secondary",
+      "description": "Пройти верификацию возраста.",
+      "category_id": 1233868538867880016,
+      "role_id": 1338906772924268666,
+      "name_prefix": "верификация"
+    },
+    "other": {
+      "label": "Другое",
+      "emoji": "📝",
+      "style": "secondary",
+      "description": "Любой другой вопрос, не подходящий под остальные категории.",
+      "category_id": 1233868538867880016,
+      "role_id": 1338906772924268666,
+      "name_prefix": "другое"
+    }
+  }
+}
