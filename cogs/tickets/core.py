@@ -198,6 +198,10 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
         if value and label != "description":
             embed.add_field(name=label, value=value, inline=False)
 
+    # Сохраняем поля формы в ticket_data для восстановления при обновлении embed
+    ticket_data["form_fields"] = {k: v for k, v in fields.items() if v and k != "description"}
+    _save_ticket_data(ticket_data)
+
     view = TicketControlView(ticket_data)
     msg = await channel.send(embed=embed, view=view)
     await msg.pin()
