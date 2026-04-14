@@ -3,6 +3,7 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
+from typing import Optional
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -68,7 +69,7 @@ async def log_action(config: dict, client: discord.Client, action: str,
 class ConfirmView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=30)
-        self.confirmed: bool | None = None
+        self.confirmed: Optional[bool] = None
 
     @discord.ui.button(label="Да, уверен", style=discord.ButtonStyle.danger, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -177,7 +178,7 @@ class RoleSelect(discord.ui.Select):
 
 class RolePanelView(discord.ui.View):
     def __init__(self, allowed_roles: list[dict], target: discord.Member):
-        super().__init__(timeout=20)
+        super().__init__(timeout=40)
         self.add_item(RoleSelect(allowed_roles, target, "give"))
         self.add_item(RoleSelect(allowed_roles, target, "take"))
 
@@ -195,7 +196,14 @@ class Roles(commands.Cog):
                 ephemeral=True
             )
 
-        config = load_config()
+        try:
+            config = load_config()
+        except Exception as e:
+            return await interaction.response.send_message(
+                embed=discord.Embed(description=f"❌ Ошибка загрузки конфига: `{e}`", color=discord.Color.red()),
+                ephemeral=True
+            )
+
         allowed = get_user_permissions(interaction.user, config)
 
         if not allowed:
@@ -203,6 +211,9 @@ class Roles(commands.Cog):
                 embed=discord.Embed(description="❌ У тебя нет прав для управления ролями.", color=discord.Color.red()),
                 ephemeral=True
             )
+
+        # Discord лимит — 25 опций в select
+        allowed = allowed[:25]
 
         embed = discord.Embed(title="🔐 Панель управления ролями", color=discord.Color.purple())
         embed.set_thumbnail(url=member.display_avatar.url)

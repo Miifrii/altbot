@@ -1,4 +1,5 @@
 import discord
+from typing import Optional
 
 WARN_REASONS = [
     ("Спам", "Массовая отправка сообщений"),
@@ -34,7 +35,7 @@ class ReasonView(discord.ui.View):
     def __init__(self, author: discord.Member, timeout: float = 30):
         super().__init__(timeout=timeout)
         self.author = author
-        self.reason: str | None = None
+        self.reason: Optional[str] = None
         self.add_item(ReasonSelect())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:

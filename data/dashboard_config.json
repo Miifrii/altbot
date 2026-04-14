@@ -1,0 +1,16 @@
+{
+  "access_roles": [],
+  "ticket_roles": {
+    "take": [],
+    "close": [],
+    "transfer": []
+  },
+  "allow_author_close": true,
+  "ephemeral_responses": true,
+  "pin_message": true,
+  "transfer_button": true,
+  "log_transcripts": true,
+  "log_create": true,
+  "log_close": true,
+  "log_actions": true
+}
