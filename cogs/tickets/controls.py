@@ -114,6 +114,24 @@ class ConfirmCloseView(discord.ui.View):
         except Exception as e:
             print(f"[DB] Ошибка close_ticket: {e}")
 
+        # Уведомление автору в ЛС
+        author_id = self.ticket_data.get("author_id")
+        if author_id:
+            author = interaction.guild.get_member(author_id)
+            if author:
+                try:
+                    embed_dm = discord.Embed(
+                        title="📋 Твой тикет закрыт",
+                        color=discord.Color.red()
+                    )
+                    embed_dm.add_field(name="Тип", value=self.ticket_data.get("type_label", "—"), inline=True)
+                    embed_dm.add_field(name="Закрыл", value=interaction.user.mention, inline=True)
+                    embed_dm.add_field(name="Причина", value=self.reason, inline=False)
+                    embed_dm.set_footer(text=interaction.guild.name)
+                    await author.send(embed=embed_dm)
+                except discord.Forbidden:
+                    pass  # ЛС закрыты
+
         try:
             await channel.delete(reason=f"Тикет закрыт: {self.reason}")
         except discord.NotFound:
