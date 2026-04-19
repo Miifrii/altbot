@@ -6,8 +6,8 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
 
-REVIEWS_CHANNEL_ID = 1398827052047667270   # ← ID канала для отзывов
-PANEL_CHANNEL_ID   = 1398827052047667270   # ← ID канала где висит кнопка
+REVIEWS_CHANNEL_ID = 1398827052047667270
+PANEL_CHANNEL_ID   = 1398827052047667270
 
 _DATA_DIR     = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 _COUNTER_FILE = os.path.join(_DATA_DIR, "review_counter.json")
@@ -15,19 +15,18 @@ _cooldowns: dict[int, float] = {}
 COOLDOWN = 60  # секунд между отзывами
 
 TYPES = {
-    "event":  {"label": "Ивент",          "emoji": "🎉", "color": discord.Color.green()},
-    "admin":  {"label": "Администратора",  "emoji": "🛡️", "color": discord.Color.blue()},
+    "event":  {"label": "Ивент",         "emoji": "🎉", "color": discord.Color.green()},
+    "admin":  {"label": "Администратора", "emoji": "🛡️", "color": discord.Color.blue()},
     "thanks": {"label": "Благодарность",  "emoji": "💜", "color": discord.Color.purple()},
     "other":  {"label": "Другое",         "emoji": "📝", "color": discord.Color.light_grey()},
 }
 
 GOALS = {
-    "reward":   {"label": "Позитивный", "emoji": "✅", "color": discord.Color.green()},
-    "punish":   {"label": "Негативный", "emoji": "❌", "color": discord.Color.red()},
+    "reward":   {"label": "Позитивный",  "emoji": "✅", "color": discord.Color.green()},
+    "punish":   {"label": "Негативный",  "emoji": "❌", "color": discord.Color.red()},
     "feedback": {"label": "Нейтральный", "emoji": "💬", "color": discord.Color.light_grey()},
 }
 
-# Типы без шага выбора тональности
 NO_GOAL_TYPES = {"thanks"}
 
 
@@ -37,7 +36,6 @@ def next_review_id(review_type: str) -> int:
             data = json.load(f)
     except (FileNotFoundError, ValueError):
         data = {}
-    
     data[review_type] = data.get(review_type, 0) + 1
     tmp = _COUNTER_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -46,6 +44,11 @@ def next_review_id(review_type: str) -> int:
     return data[review_type]
 
 
+def split_text_fields(embed: discord.Embed, name: str, text: str, chunk_size: int = 1024):
+    """Добавляет текст в embed, разбивая на несколько field'ов если текст длиннее chunk_size."""
+    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+    for idx, chunk in enumerate(chunks):
+        embed.add_field(name=name if idx == 0 else "\u200b", value=chunk, inline=False)
 
 
 async def send_review(guild: discord.Guild, channel: discord.TextChannel, review_data: dict):
@@ -61,7 +64,7 @@ async def send_review(guild: discord.Guild, channel: discord.TextChannel, review
             timestamp=datetime.now()
         )
         embed.add_field(name="Кому посвящается", value=review_data["target"], inline=False)
-        embed.add_field(name="За что",            value=review_data["reason"], inline=False)
+        split_text_fields(embed, "За что", review_data["reason"])
 
     elif review_data["type"] == "event":
         embed = discord.Embed(
@@ -72,7 +75,7 @@ async def send_review(guild: discord.Guild, channel: discord.TextChannel, review
         embed.add_field(name="Дата проведения",          value=review_data["event_date"],   inline=False)
         embed.add_field(name="Оценка ивента",            value=review_data["event_rating"], inline=False)
         embed.add_field(name="Оценка ивентолога (1–10)", value=review_data["host_rating"],  inline=False)
-        embed.add_field(name="Отзыв",                    value=review_data["reason"],       inline=False)
+        split_text_fields(embed, "Отзыв", review_data["reason"])
 
     elif review_data["type"] == "admin":
         embed = discord.Embed(
@@ -81,7 +84,7 @@ async def send_review(guild: discord.Guild, channel: discord.TextChannel, review
             timestamp=datetime.now()
         )
         embed.add_field(name="На кого", value=review_data["target"], inline=False)
-        embed.add_field(name="Причина", value=review_data["reason"], inline=False)
+        split_text_fields(embed, "Причина", review_data["reason"])
 
     else:  # other
         embed = discord.Embed(
@@ -90,9 +93,8 @@ async def send_review(guild: discord.Guild, channel: discord.TextChannel, review
             timestamp=datetime.now()
         )
         embed.add_field(name="На что отзыв", value=review_data["target"], inline=False)
-        embed.add_field(name="Отзыв",        value=review_data["reason"], inline=False)
+        split_text_fields(embed, "Отзыв", review_data["reason"])
 
-    # Footer: тональность (кроме благодарности)
     footer_parts = []
     if review_data["type"] != "thanks" and goal:
         footer_parts.append(f"{goal['emoji']} {goal['label']}")
@@ -127,7 +129,7 @@ def _base_review_data(review_type: str, user: discord.Member) -> dict:
 class EventModal(discord.ui.Modal, title="🎉 Отзыв на ивент"):
     event_date   = discord.ui.TextInput(label="Дата проведения", max_length=50)
     event_rating = discord.ui.TextInput(label="Как вы оцените проведённый ивент?", max_length=200)
-    review_text  = discord.ui.TextInput(label="Ваш отзыв", style=discord.TextStyle.paragraph, max_length=500)
+    review_text  = discord.ui.TextInput(label="Ваш отзыв", style=discord.TextStyle.paragraph, max_length=4000)
     host_rating  = discord.ui.TextInput(label="Оцените работу ивентолога от 1 до 10", max_length=10)
 
     def __init__(self, user: discord.Member):
@@ -151,7 +153,7 @@ class EventModal(discord.ui.Modal, title="🎉 Отзыв на ивент"):
 
 
 class AdminModal(discord.ui.Modal, title="🛡️ Отзыв на администратора"):
-    reason = discord.ui.TextInput(label="Из-за чего решили написать отзыв?", style=discord.TextStyle.paragraph, max_length=500)
+    reason = discord.ui.TextInput(label="Из-за чего решили написать отзыв?", style=discord.TextStyle.paragraph, max_length=4000)
     target = discord.ui.TextInput(label="На кого вы пишете отзыв?", max_length=100)
 
     def __init__(self, user: discord.Member):
@@ -173,7 +175,7 @@ class AdminModal(discord.ui.Modal, title="🛡️ Отзыв на админис
 
 class ThanksModal(discord.ui.Modal, title="💜 Благодарность"):
     target = discord.ui.TextInput(label="Кому посвящается?", max_length=100)
-    reason = discord.ui.TextInput(label="За что?", style=discord.TextStyle.paragraph, max_length=500)
+    reason = discord.ui.TextInput(label="За что?", style=discord.TextStyle.paragraph, max_length=4000)
 
     def __init__(self, user: discord.Member):
         super().__init__()
@@ -194,7 +196,7 @@ class ThanksModal(discord.ui.Modal, title="💜 Благодарность"):
 
 class OtherModal(discord.ui.Modal, title="📝 Другое"):
     target = discord.ui.TextInput(label="На что пишете отзыв?", max_length=100)
-    reason = discord.ui.TextInput(label="Ваш отзыв", style=discord.TextStyle.paragraph, max_length=500)
+    reason = discord.ui.TextInput(label="Ваш отзыв", style=discord.TextStyle.paragraph, max_length=4000)
 
     def __init__(self, user: discord.Member):
         super().__init__()
@@ -266,7 +268,6 @@ class AnonView(discord.ui.View):
     async def _proceed(self, interaction: discord.Interaction, anonymous: bool):
         self.review_data["anonymous"] = anonymous
         if self.review_data["type"] in NO_GOAL_TYPES:
-            # Сразу отправляем без выбора тональности
             await interaction.response.defer(ephemeral=True)
             channel = interaction.guild.get_channel(REVIEWS_CHANNEL_ID)
             if not channel:
@@ -362,7 +363,7 @@ class Reviews(commands.Cog):
     @app_commands.command(name="review_panel", description="Отправить панель отзывов (только для администраторов)")
     @app_commands.default_permissions(administrator=True)
     async def review_panel(self, interaction: discord.Interaction):
-        channel = interaction.guild.get_channel(PANEL_CHANNEL_ID) if PANEL_CHANNEL_ID else interaction.channel
+        channel = interaction.guild.get_channel(PANEL_CHANNEL_ID) or interaction.channel
 
         embed = discord.Embed(
             title="> <:log_galaxy:1463258898231197696> Система отзывов ",
