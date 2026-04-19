@@ -188,17 +188,40 @@ class TicketControlView(discord.ui.View):
         if self.ticket_data.get("id") == 0:
             import json
             from .core import _TICKETS_FILE, _channel_tickets, _load_channel_map
+            from database import get_ticket_by_channel
+            from .config import TICKET_CONFIG
+
+            # Сначала пробуем БД
             try:
-                _load_channel_map()
-                ticket_id = _channel_tickets.get(interaction.channel.id)
-                if ticket_id is not None:
-                    with open(_TICKETS_FILE, "r", encoding="utf-8") as f:
-                        all_tickets = json.load(f)
-                    td = all_tickets.get(str(ticket_id))
-                    if td:
-                        self.ticket_data = td
+                row = get_ticket_by_channel(interaction.channel.id)
+                if row:
+                    ticket_id = row["id"]
+                    t_type = row["type"]
+                    t_cfg = TICKET_CONFIG.get("types", {}).get(t_type, {})
+                    # Базовые данные из БД
+                    self.ticket_data = {
+                        "id": ticket_id,
+                        "type": t_type,
+                        "type_label": t_cfg.get("label", t_type),
+                        "author": f"<@{row['user_id']}>",
+                        "author_id": row["user_id"],
+                        "description": "",
+                        "form_fields": {},
+                        "created_at": row["created_at"],
+                        "avatar_url": None,
+                    }
+                    # Дополняем из JSON если есть
+                    try:
+                        with open(_TICKETS_FILE, "r", encoding="utf-8") as f:
+                            all_tickets = json.load(f)
+                        td = all_tickets.get(str(ticket_id))
+                        if td:
+                            self.ticket_data.update(td)
+                    except Exception:
+                        pass
             except Exception as e:
-                print(f"[TICKET] Ошибка загрузки ticket_data: {e}")
+                print(f"[TICKET] Ошибка загрузки ticket_data из БД: {e}")
+
         return self.ticket_data
 
     @discord.ui.button(label="Взять тикет", style=discord.ButtonStyle.success, emoji="🙋", custom_id="ticket_take")

@@ -53,4 +53,4 @@ async def generate_transcript(channel: discord.TextChannel) -> discord.File:
         ))
 
     html = HTML_TEMPLATE.format(channel=channel.name, messages="\n".join(messages_html))
-    return discord.File(io.BytesIO(html.encode("utf-8")), filename=f"transcript-{channel.name}.html")
+    return discord.File(io.BytesIO(html.encode("utf-8")), filename=f"transcript-{channel.name}.html", spoiler=True)
