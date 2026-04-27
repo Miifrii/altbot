@@ -85,6 +85,13 @@ def next_ticket_id(ticket_type: str) -> int:
     return counters[ticket_type]
 
 
+def _split_text_fields(embed: discord.Embed, name: str, text: str, chunk_size: int = 1024):
+    """Разбивает длинный текст на несколько field'ов."""
+    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+    for idx, chunk in enumerate(chunks):
+        embed.add_field(name=name if idx == 0 else "\u200b", value=chunk, inline=False)
+
+
 def _validate_config():
     """Проверяет конфиг при старте и выводит предупреждения."""
     cfg = TICKET_CONFIG
@@ -196,7 +203,7 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
     embed = build_ticket_embed(ticket_data, "открыт")
     for label, value in fields.items():
         if value and label != "description":
-            embed.add_field(name=label, value=value, inline=False)
+            _split_text_fields(embed, label, value)
 
     # Сохраняем поля формы в ticket_data для восстановления при обновлении embed
     ticket_data["form_fields"] = {k: v for k, v in fields.items() if v and k != "description"}
@@ -221,7 +228,7 @@ class ComplaintModal(discord.ui.Modal, title="🚨 Жалоба"):
     reporter = discord.ui.TextInput(label="Ваш игровой логин SS14", max_length=100)
     round_id = discord.ui.TextInput(label="ID раунда или примерное время события", max_length=100)
     rules    = discord.ui.TextInput(label="Номера нарушенных правил", max_length=100)
-    content  = discord.ui.TextInput(label="Содержание жалобы", style=discord.TextStyle.paragraph, max_length=1000)
+    content  = discord.ui.TextInput(label="Содержание жалобы", style=discord.TextStyle.paragraph, max_length=4000)
 
     def __init__(self, type_cfg: dict):
         super().__init__()
@@ -243,7 +250,7 @@ class AppealModal(discord.ui.Modal, title="⚖️ Обжалование"):
     ckey       = discord.ui.TextInput(label="Ваш логин SS14", max_length=100)
     ban_date   = discord.ui.TextInput(label="Дата / время или ID бана", max_length=100)
     ban_reason = discord.ui.TextInput(label="Причина бана", max_length=200)
-    content    = discord.ui.TextInput(label="Текст обжалования", style=discord.TextStyle.paragraph, max_length=1000)
+    content    = discord.ui.TextInput(label="Текст обжалования", style=discord.TextStyle.paragraph, max_length=4000)
 
     def __init__(self, type_cfg: dict):
         super().__init__()
