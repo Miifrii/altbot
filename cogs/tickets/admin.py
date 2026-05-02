@@ -1,7 +1,6 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from .core import _channel_tickets
 from .config import TICKET_CONFIG
 
 

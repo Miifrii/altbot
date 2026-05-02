@@ -1,57 +1,16 @@
-import json
-import os
 import discord
 from discord import app_commands
 from discord.ext import commands
 from typing import Optional
 from datetime import datetime
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_FILE = os.path.join(BASE_DIR, "data", "roles_config.json")
-
-
-def load_config() -> dict:
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+from config import CONFIG
+from database import get_user_permissions, get_department_role_id, get_department_roles
 
 
-def get_user_permissions(member: discord.Member, config: dict) -> list[dict]:
-    allowed = []
-    member_role_ids = {r.id for r in member.roles}
-    superadmin_id = config.get("superadmin_role_id")
-    is_superadmin = bool(superadmin_id and superadmin_id in member_role_ids)
-
-    for dept_key, dept in config["departments"].items():
-        dept_roles = dept["roles"]
-        emoji = dept.get("emoji", "⭐")
-
-        if is_superadmin:
-            for r in dept_roles:
-                if r["id"] != 0:
-                    allowed.append({"role_id": r["id"], "role_name": r["name"],
-                                    "dept_key": dept_key, "dept_name": dept["name"], "dept_emoji": emoji})
-            continue
-
-        user_level = max(
-            (r["level"] for r in dept_roles if r["id"] in member_role_ids),
-            default=None
-        )
-        if user_level is None:
-            continue
-
-        grantable = dept["can_grant"].get(str(user_level), [])
-        for r in dept_roles:
-            if r["level"] in grantable and r["id"] != 0:
-                allowed.append({"role_id": r["id"], "role_name": r["name"],
-                                "dept_key": dept_key, "dept_name": dept["name"], "dept_emoji": emoji})
-
-    return allowed
-
-
-async def log_action(config: dict, client: discord.Client, action: str,
+async def log_action(client: discord.Client, action: str,
                      grantor: discord.Member, target: discord.Member,
                      role: discord.Role, dept_name: str):
-    channel_id = config.get("log_channel_id", 0)
+    channel_id = CONFIG["channels"]["log"]
     if not channel_id:
         return
     channel = client.get_channel(channel_id)
@@ -104,11 +63,13 @@ class RoleSelect(discord.ui.Select):
         super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        config = load_config()
         role_id = int(self.values[0])
         grantor = interaction.user
 
-        allowed = get_user_permissions(grantor, config)
+        # Получаем разрешенные роли заново для проверки
+        member_role_ids = {r.id for r in grantor.roles}
+        allowed = get_user_permissions(member_role_ids, CONFIG["roles"]["superadmin"])
+        
         if role_id not in [r["role_id"] for r in allowed]:
             return await interaction.response.send_message(
                 embed=discord.Embed(description="❌ У тебя нет прав на эту роль.", color=discord.Color.red()),
@@ -125,7 +86,7 @@ class RoleSelect(discord.ui.Select):
         role_info = next(r for r in allowed if r["role_id"] == role_id)
         dept_key = role_info["dept_key"]
         dept_name = role_info["dept_name"]
-        dept_role_id = config["departments"][dept_key].get("dept_role_id", 0)
+        dept_role_id = get_department_role_id(dept_key)
         dept_role = interaction.guild.get_role(dept_role_id) if dept_role_id else None
 
         if self.action == "give":
@@ -144,7 +105,7 @@ class RoleSelect(discord.ui.Select):
                 return
             roles_to_add = [r for r in [role, dept_role] if r]
             await self.target.add_roles(*roles_to_add, reason=f"Выдано {grantor}")
-            await log_action(config, interaction.client, "выдана", grantor, self.target, role, dept_name)
+            await log_action(interaction.client, "выдана", grantor, self.target, role, dept_name)
             await interaction.edit_original_response(
                 embed=discord.Embed(description=f"✅ Роль {role.mention} выдана {self.target.mention}.", color=discord.Color.green()),
                 view=None
@@ -165,11 +126,11 @@ class RoleSelect(discord.ui.Select):
                 return
             roles_to_remove = [role]
             if dept_role:
-                dept_role_ids = {r["id"] for r in config["departments"][dept_key]["roles"]}
+                dept_role_ids = set(get_department_roles(dept_key))
                 if not any(r for r in self.target.roles if r.id in dept_role_ids and r.id != role_id):
                     roles_to_remove.append(dept_role)
             await self.target.remove_roles(*roles_to_remove, reason=f"Снято {grantor}")
-            await log_action(config, interaction.client, "снята", grantor, self.target, role, dept_name)
+            await log_action(interaction.client, "снята", grantor, self.target, role, dept_name)
             await interaction.edit_original_response(
                 embed=discord.Embed(description=f"✅ Роль {role.mention} снята с {self.target.mention}.", color=discord.Color.green()),
                 view=None
@@ -196,15 +157,8 @@ class Roles(commands.Cog):
                 ephemeral=True
             )
 
-        try:
-            config = load_config()
-        except Exception as e:
-            return await interaction.response.send_message(
-                embed=discord.Embed(description=f"❌ Ошибка загрузки конфига: `{e}`", color=discord.Color.red()),
-                ephemeral=True
-            )
-
-        allowed = get_user_permissions(interaction.user, config)
+        member_role_ids = {r.id for r in interaction.user.roles}
+        allowed = get_user_permissions(member_role_ids, CONFIG["roles"]["superadmin"])
 
         if not allowed:
             return await interaction.response.send_message(

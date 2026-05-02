@@ -1,18 +1,10 @@
 import discord
 import json
-import os
-import time
 from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
-
-REVIEWS_CHANNEL_ID = 1398827052047667270
-PANEL_CHANNEL_ID   = 1398827052047667270
-
-_DATA_DIR     = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-_COUNTER_FILE = os.path.join(_DATA_DIR, "review_counter.json")
-_cooldowns: dict[int, float] = {}
-COOLDOWN = 60  # секунд между отзывами
+from config import CONFIG
+from database import next_review_id, check_cooldown
 
 TYPES = {
     "event":  {"label": "Ивент",         "emoji": "🎉", "color": discord.Color.green()},
@@ -28,20 +20,6 @@ GOALS = {
 }
 
 NO_GOAL_TYPES = {"thanks"}
-
-
-def next_review_id(review_type: str) -> int:
-    try:
-        with open(_COUNTER_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (FileNotFoundError, ValueError):
-        data = {}
-    data[review_type] = data.get(review_type, 0) + 1
-    tmp = _COUNTER_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.replace(tmp, _COUNTER_FILE)
-    return data[review_type]
 
 
 def split_text_fields(embed: discord.Embed, name: str, text: str, chunk_size: int = 1024):
@@ -233,18 +211,25 @@ class GoalView(discord.ui.View):
     async def _send(self, interaction: discord.Interaction, goal: str):
         self.review_data["goal"] = goal
         await interaction.response.defer(ephemeral=True)
-        channel = interaction.guild.get_channel(REVIEWS_CHANNEL_ID)
+        channel = interaction.guild.get_channel(CONFIG["channels"]["reviews"])
         if not channel:
             await interaction.followup.send(
-                embed=discord.Embed(description="❌ Канал для отзывов не найден.", color=discord.Color.red()),
+                embed=discord.Embed(description="❌ Канал для отзывов не найден. Проверь конфигурацию.", color=discord.Color.red()),
                 ephemeral=True
             )
             return
-        await send_review(interaction.guild, channel, self.review_data)
-        await interaction.followup.send(
-            embed=discord.Embed(description="✅ Ваш отзыв успешно отправлен!", color=discord.Color.green()),
-            ephemeral=True
-        )
+        try:
+            await send_review(interaction.guild, channel, self.review_data)
+            await interaction.followup.send(
+                embed=discord.Embed(description="✅ Ваш отзыв успешно отправлен!", color=discord.Color.green()),
+                ephemeral=True
+            )
+        except Exception as e:
+            print(f"[REVIEWS] Ошибка отправки отзыва: {e}")
+            await interaction.followup.send(
+                embed=discord.Embed(description="❌ Ошибка при отправке отзыва.", color=discord.Color.red()),
+                ephemeral=True
+            )
         self.stop()
 
     @discord.ui.button(label="Позитивный", style=discord.ButtonStyle.secondary, emoji="✅")
@@ -269,7 +254,7 @@ class AnonView(discord.ui.View):
         self.review_data["anonymous"] = anonymous
         if self.review_data["type"] in NO_GOAL_TYPES:
             await interaction.response.defer(ephemeral=True)
-            channel = interaction.guild.get_channel(REVIEWS_CHANNEL_ID)
+            channel = interaction.guild.get_channel(CONFIG["channels"]["reviews"])
             if not channel:
                 await interaction.followup.send(
                     embed=discord.Embed(description="❌ Канал для отзывов не найден.", color=discord.Color.red()),
@@ -335,9 +320,10 @@ class ReviewPanelView(discord.ui.View):
                        emoji="📝", custom_id="review_start")
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
         user = interaction.user
-        now = time.time()
-        remaining = COOLDOWN - (now - _cooldowns.get(user.id, 0))
-        if remaining > 0:
+        
+        # Проверяем кулдаун через базу данных
+        remaining = check_cooldown(user.id, "review", CONFIG["reviews"]["cooldown_seconds"])
+        if remaining is not None:
             return await interaction.response.send_message(
                 embed=discord.Embed(
                     description=f"⏳ Подожди ещё **{int(remaining)}** сек. перед следующим отзывом.",
@@ -345,7 +331,7 @@ class ReviewPanelView(discord.ui.View):
                 ),
                 ephemeral=True
             )
-        _cooldowns[user.id] = now
+        
         await interaction.response.send_message(
             embed=discord.Embed(description="Отзыв на что?", color=discord.Color.purple()),
             view=TypeSelectView(user),
@@ -363,7 +349,7 @@ class Reviews(commands.Cog):
     @app_commands.command(name="review_panel", description="Отправить панель отзывов (только для администраторов)")
     @app_commands.default_permissions(administrator=True)
     async def review_panel(self, interaction: discord.Interaction):
-        channel = interaction.guild.get_channel(PANEL_CHANNEL_ID) or interaction.channel
+        channel = interaction.guild.get_channel(CONFIG["channels"]["reviews_panel"]) or interaction.channel
 
         embed = discord.Embed(
             title="> <:log_galaxy:1463258898231197696> Система отзывов ",

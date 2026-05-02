@@ -1,6 +1,5 @@
 import discord
 import json
-import os
 import time
 from typing import Optional
 from discord.ext import commands
@@ -8,81 +7,7 @@ from discord import app_commands
 from datetime import datetime
 from .config import TICKET_CONFIG
 from .controls import TicketControlView, build_ticket_embed
-from database import create_ticket as db_create_ticket
-
-_cooldowns: dict[int, float] = {}
-_active_tickets: dict[int, int] = {}  # user_id -> channel_id
-_channel_tickets: dict[int, int] = {}  # channel_id -> ticket_id
-
-_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data")
-_COUNTER_FILE     = os.path.join(_DATA_DIR, "ticket_counters.json")
-_ACTIVE_FILE      = os.path.join(_DATA_DIR, "active_tickets.json")
-_TICKETS_FILE     = os.path.join(_DATA_DIR, "tickets_data.json")
-_CHANNEL_MAP_FILE = os.path.join(_DATA_DIR, "channel_tickets.json")
-
-
-def _atomic_write(path: str, data: dict, **kwargs):
-    """Атомарная запись JSON через временный файл."""
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, **kwargs)
-    os.replace(tmp, path)
-
-
-def _load_active():
-    global _active_tickets
-    try:
-        with open(_ACTIVE_FILE, "r", encoding="utf-8") as f:
-            _active_tickets = {int(k): v for k, v in json.load(f).items()}
-    except (FileNotFoundError, ValueError):
-        _active_tickets = {}
-
-
-def _save_active():
-    _atomic_write(_ACTIVE_FILE, {str(k): v for k, v in _active_tickets.items()})
-
-
-def _load_channel_map():
-    global _channel_tickets
-    try:
-        with open(_CHANNEL_MAP_FILE, "r", encoding="utf-8") as f:
-            _channel_tickets = {int(k): v for k, v in json.load(f).items()}
-    except (FileNotFoundError, ValueError):
-        _channel_tickets = {}
-
-
-def _save_channel_map():
-    _atomic_write(_CHANNEL_MAP_FILE, {str(k): v for k, v in _channel_tickets.items()})
-
-
-def _load_ticket_data(ticket_id: int) -> Optional[dict]:
-    try:
-        with open(_TICKETS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data.get(str(ticket_id))
-    except (FileNotFoundError, ValueError):
-        return None
-
-
-def _save_ticket_data(ticket_data: dict):
-    try:
-        with open(_TICKETS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (FileNotFoundError, ValueError):
-        data = {}
-    data[str(ticket_data["id"])] = ticket_data
-    _atomic_write(_TICKETS_FILE, data, ensure_ascii=False)
-
-
-def next_ticket_id(ticket_type: str) -> int:
-    try:
-        with open(_COUNTER_FILE, "r", encoding="utf-8") as f:
-            counters = json.load(f)
-    except (FileNotFoundError, ValueError):
-        counters = {}
-    counters[ticket_type] = counters.get(ticket_type, 0) + 1
-    _atomic_write(_COUNTER_FILE, counters)
-    return counters[ticket_type]
+from database import create_ticket as db_create_ticket, next_ticket_id, check_cooldown, get_active_ticket
 
 
 def _split_text_fields(embed: discord.Embed, name: str, text: str, chunk_size: int = 1024):
@@ -121,30 +46,28 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
     guild = interaction.guild
     cfg = TICKET_CONFIG
 
-    now = time.time()
-    remaining = cfg["cooldown_seconds"] - (now - _cooldowns.get(user.id, 0))
-    if remaining > 0:
+    # Проверяем кулдаун через базу данных
+    remaining = check_cooldown(user.id, "ticket", cfg["cooldown_seconds"])
+    if remaining is not None:
         return await interaction.response.send_message(
             embed=discord.Embed(description=f"⏳ Подожди ещё **{int(remaining)}** сек.", color=discord.Color.orange()),
             ephemeral=True
         )
 
-    if cfg["one_active_per_user"] and user.id in _active_tickets:
-        ch = guild.get_channel(_active_tickets[user.id])
-        if ch is not None:
-            return await interaction.response.send_message(
-                embed=discord.Embed(description=f"❌ У тебя уже есть активный тикет: {ch.mention}", color=discord.Color.red()),
-                ephemeral=True
-            )
-        del _active_tickets[user.id]
-        _save_active()
+    # Проверяем активные тикеты через базу данных
+    if cfg["one_active_per_user"]:
+        active_ticket = get_active_ticket(user.id, guild.id)
+        if active_ticket:
+            ch = guild.get_channel(active_ticket["channel_id"])
+            if ch is not None:
+                return await interaction.response.send_message(
+                    embed=discord.Embed(description=f"❌ У тебя уже есть активный тикет: {ch.mention}", color=discord.Color.red()),
+                    ephemeral=True
+                )
 
-    # Резервируем слот сразу, чтобы избежать race condition
-    _active_tickets[user.id] = -1
     await interaction.response.defer(ephemeral=True)
 
     ticket_id = next_ticket_id(ticket_type)
-    _cooldowns[user.id] = now
 
     try:
         category = guild.get_channel(type_cfg["category_id"])
@@ -164,17 +87,11 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
             reason=f"Тикет #{ticket_id} от {user}"
         )
     except Exception as e:
-        # Освобождаем зарезервированный слот при ошибке
-        _active_tickets.pop(user.id, None)
-        _save_active()
         await interaction.followup.send(
             embed=discord.Embed(description=f"❌ Не удалось создать канал тикета: {e}", color=discord.Color.red()),
             ephemeral=True
         )
         return
-
-    _active_tickets[user.id] = channel.id
-    _save_active()
 
     description = fields.get("description", next(iter(fields.values()), "—"))
 
@@ -189,25 +106,19 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
         "created_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
         "assignee_id": None,
         "avatar_url": str(user.display_avatar.url),
+        "form_fields": {k: v for k, v in fields.items() if v and k != "description"}
     }
-    _save_ticket_data(ticket_data)
-
-    _channel_tickets[channel.id] = ticket_id
-    _save_channel_map()
 
     try:
-        db_create_ticket(ticket_id, guild.id, channel.id, user.id, ticket_type)
+        db_create_ticket(ticket_id, guild.id, channel.id, user.id, ticket_type, ticket_data)
     except Exception as e:
         print(f"[DB] Ошибка записи тикета: {e}")
+        # Не критично - тикет создан, просто не записался в БД
 
     embed = build_ticket_embed(ticket_data, "открыт")
     for label, value in fields.items():
         if value and label != "description":
             _split_text_fields(embed, label, value)
-
-    # Сохраняем поля формы в ticket_data для восстановления при обновлении embed
-    ticket_data["form_fields"] = {k: v for k, v in fields.items() if v and k != "description"}
-    _save_ticket_data(ticket_data)
 
     view = TicketControlView(ticket_data)
     msg = await channel.send(embed=embed, view=view)
@@ -442,15 +353,7 @@ class PanelEmbedModal(discord.ui.Modal, title="Редактировать пан
 class TicketsCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        _load_active()
-        _load_channel_map()
         _validate_config()
-        # Восстанавливаем ID сообщения панели после рестарта
-        try:
-            with open(os.path.join(_DATA_DIR, "panel_state.json"), "r", encoding="utf-8") as f:
-                TICKET_CONFIG["panel_message_id"] = json.load(f).get("panel_message_id", 0)
-        except (FileNotFoundError, ValueError):
-            pass
         bot.add_view(TicketPanelView())
         bot.add_view(TicketControlView({
             "id": 0, "type": "", "type_label": "",
@@ -473,7 +376,7 @@ class TicketsCore(commands.Cog):
 
         msg = await channel.send(embed=build_panel_embeds(), view=TicketPanelView())
         TICKET_CONFIG["panel_message_id"] = msg.id
-        _atomic_write(os.path.join(_DATA_DIR, "panel_state.json"), {"panel_message_id": msg.id}, ensure_ascii=False)
+        
         await interaction.followup.send(
             embed=discord.Embed(description=f"✅ Панель отправлена в {channel.mention}", color=discord.Color.green()),
             ephemeral=True
