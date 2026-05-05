@@ -83,21 +83,58 @@ class ConfirmCloseView(discord.ui.View):
         except Exception:
             transcript = None
 
+        # Получаем актуальные данные тикета из БД
+        ticket_id = 0
+        type_label = "—"
+        author_mention = "—"
+        
+        try:
+            row = get_ticket_by_channel(channel.id)
+            if row:
+                ticket_id = row["id"]
+                t_type = row["type"]
+                user_id = row["user_id"]
+                
+                # Получаем конфиг типа тикета
+                t_cfg = TICKET_CONFIG.get("types", {}).get(t_type, {})
+                type_label = t_cfg.get("label", t_type)
+                
+                # Получаем пользователя
+                author = interaction.guild.get_member(user_id)
+                author_mention = author.mention if author else f"<@{user_id}>"
+                
+                print(f"[LOG] Данные тикета из БД: ID={ticket_id}, тип={type_label}, автор={author_mention}")
+            else:
+                print(f"[LOG] Тикет не найден в БД для канала {channel.id}")
+                # Fallback на данные из ticket_data
+                ticket_id = self.ticket_data.get("id", 0)
+                type_label = self.ticket_data.get("type_label", "—")
+                author_mention = self.ticket_data.get("author", "—")
+                print(f"[LOG] Fallback данные: ID={ticket_id}, тип={type_label}, автор={author_mention}")
+        except Exception as e:
+            print(f"[LOG] Ошибка получения данных тикета: {e}")
+            # Fallback на данные из ticket_data
+            ticket_id = self.ticket_data.get("id", 0)
+            type_label = self.ticket_data.get("type_label", "—")
+            author_mention = self.ticket_data.get("author", "—")
+            print(f"[LOG] Fallback после ошибки: ID={ticket_id}, тип={type_label}, автор={author_mention}")
+
         if log_channel_id:
             log_channel = interaction.guild.get_channel(log_channel_id)
             if log_channel:
-                embed = discord.Embed(title=f"📋 Тикет #{self.ticket_data['id']} закрыт", color=discord.Color.red())
-                embed.add_field(name="Тип",     value=self.ticket_data.get("type_label", "—"), inline=True)
-                embed.add_field(name="Автор",   value=self.ticket_data.get("author", "—"),     inline=True)
-                embed.add_field(name="Закрыл",  value=interaction.user.mention,                inline=True)
-                embed.add_field(name="Причина", value=self.reason,                             inline=False)
+                embed = discord.Embed(title=f"📋 Тикет #{ticket_id} закрыт", color=discord.Color.red())
+                embed.add_field(name="Тип",     value=type_label,               inline=True)
+                embed.add_field(name="Автор",   value=author_mention,           inline=True)
+                embed.add_field(name="Закрыл",  value=interaction.user.mention, inline=True)
+                embed.add_field(name="Причина", value=self.reason,              inline=False)
                 try:
                     if transcript:
                         await log_channel.send(embed=embed, file=transcript)
                     else:
                         await log_channel.send(embed=embed)
-                except Exception:
-                    pass
+                    print(f"[LOG] Лог отправлен: Тикет #{ticket_id}, тип={type_label}")
+                except Exception as e:
+                    print(f"[LOG] Ошибка отправки лога: {e}")
 
         try:
             row = get_ticket_by_channel(channel.id)
@@ -177,37 +214,41 @@ class TicketControlView(discord.ui.View):
         self.assignee: discord.Member = None
 
     def _get_data(self, interaction: discord.Interaction) -> dict:
-        if self.ticket_data.get("id") == 0:
-            # Загружаем данные из БД
-            try:
-                row = get_ticket_by_channel(interaction.channel.id)
-                if row:
-                    ticket_id = row["id"]
-                    t_type = row["type"]
-                    t_cfg = TICKET_CONFIG.get("types", {}).get(t_type, {})
-                    
-                    # Парсим form_data из JSON
-                    form_fields = {}
-                    if row["form_data"]:
-                        try:
-                            form_fields = json.loads(row["form_data"])
-                        except json.JSONDecodeError:
-                            pass
-                    
-                    # Базовые данные из БД
-                    self.ticket_data = {
-                        "id": ticket_id,
-                        "type": t_type,
-                        "type_label": t_cfg.get("label", t_type),
-                        "author": f"<@{row['user_id']}>",
-                        "author_id": row["user_id"],
-                        "description": "",
-                        "form_fields": form_fields,
-                        "created_at": row["created_at"],
-                        "avatar_url": None,
-                    }
-            except Exception as e:
-                print(f"[TICKET] Ошибка загрузки ticket_data из БД: {e}")
+        # Всегда пытаемся загрузить актуальные данные из БД
+        try:
+            row = get_ticket_by_channel(interaction.channel.id)
+            if row:
+                ticket_id = row["id"]
+                t_type = row["type"]
+                t_cfg = TICKET_CONFIG.get("types", {}).get(t_type, {})
+                
+                # Парсим form_data из JSON
+                form_fields = {}
+                if row["form_data"]:
+                    try:
+                        form_fields = json.loads(row["form_data"])
+                    except json.JSONDecodeError:
+                        pass
+                
+                # Получаем пользователя для корректного отображения
+                author = interaction.guild.get_member(row["user_id"])
+                author_mention = author.mention if author else f"<@{row['user_id']}>"
+                
+                # Обновляем данные из БД
+                self.ticket_data = {
+                    "id": ticket_id,
+                    "type": t_type,
+                    "type_label": t_cfg.get("label", t_type),
+                    "author": author_mention,
+                    "author_id": row["user_id"],
+                    "description": self.ticket_data.get("description", ""),
+                    "form_fields": form_fields,
+                    "created_at": row["created_at"],
+                    "avatar_url": str(author.display_avatar.url) if author else None,
+                }
+                print(f"[TICKET] Загружены данные из БД: ID={ticket_id}, тип={t_cfg.get('label', t_type)}")
+        except Exception as e:
+            print(f"[TICKET] Ошибка загрузки ticket_data из БД: {e}")
 
         return self.ticket_data
 
