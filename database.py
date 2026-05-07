@@ -122,6 +122,23 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_ticket_mod_roles_guild_type 
         ON ticket_moderator_roles(guild_id, ticket_type);
+
+        CREATE TABLE IF NOT EXISTS ticket_panel_config (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id         INTEGER NOT NULL UNIQUE,
+            title            TEXT    NOT NULL DEFAULT '🎫 Тикеты поддержки',
+            description      TEXT,
+            footer           TEXT,
+            color            INTEGER NOT NULL DEFAULT 10181046,
+            banner_url       TEXT,
+            panel_channel_id INTEGER,
+            panel_message_id INTEGER,
+            updated_by       INTEGER,
+            updated_at       TEXT    NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_panel_config_guild 
+        ON ticket_panel_config(guild_id);
         """)
         
         # Миграция схемы: добавляем form_data если её нет
@@ -462,6 +479,117 @@ def get_department_roles(dept_id: str) -> list[int]:
             "SELECT role_id FROM department_roles WHERE dept_id=? AND role_id != 0", (dept_id,)
         ).fetchall()
         return [row["role_id"] for row in rows]
+
+
+# ── Ticket Panel Config ───────────────────────────────────────────────────────
+
+def get_panel_config(guild_id: int) -> Optional[sqlite3.Row]:
+    """Получает конфигурацию панели тикетов для сервера."""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM ticket_panel_config WHERE guild_id=?", (guild_id,)
+        ).fetchone()
+
+
+def update_panel_config(guild_id: int, updated_by: int, **kwargs) -> bool:
+    """
+    Обновляет конфигурацию панели тикетов.
+    
+    Args:
+        guild_id: ID сервера
+        updated_by: ID пользователя, который обновляет
+        **kwargs: Поля для обновления (title, description, footer, color, banner_url, etc.)
+    
+    Returns:
+        bool: True если обновлено, False если ошибка
+    """
+    from datetime import datetime
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    
+    # Разрешенные поля для обновления
+    allowed_fields = {
+        'title', 'description', 'footer', 'color', 
+        'banner_url', 'panel_channel_id', 'panel_message_id'
+    }
+    
+    # Фильтруем только разрешенные поля
+    updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
+    
+    if not updates:
+        return False
+    
+    # Добавляем метаданные
+    updates['updated_by'] = updated_by
+    updates['updated_at'] = now
+    
+    with get_conn() as conn:
+        # Проверяем существует ли запись
+        existing = conn.execute(
+            "SELECT id FROM ticket_panel_config WHERE guild_id=?", (guild_id,)
+        ).fetchone()
+        
+        if existing:
+            # UPDATE существующей записи
+            set_clause = ', '.join(f"{k}=?" for k in updates.keys())
+            values = list(updates.values()) + [guild_id]
+            conn.execute(
+                f"UPDATE ticket_panel_config SET {set_clause} WHERE guild_id=?",
+                values
+            )
+        else:
+            # INSERT новой записи
+            updates['guild_id'] = guild_id
+            columns = ', '.join(updates.keys())
+            placeholders = ', '.join('?' * len(updates))
+            conn.execute(
+                f"INSERT INTO ticket_panel_config ({columns}) VALUES ({placeholders})",
+                list(updates.values())
+            )
+        
+        return True
+
+
+def init_default_panel_config(guild_id: int, default_config: dict) -> bool:
+    """
+    Создает дефолтную конфигурацию панели для сервера.
+    
+    Args:
+        guild_id: ID сервера
+        default_config: Словарь с дефолтными значениями
+    
+    Returns:
+        bool: True если создано, False если уже существует
+    """
+    from datetime import datetime
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    
+    with get_conn() as conn:
+        # Проверяем существует ли уже конфиг
+        existing = conn.execute(
+            "SELECT id FROM ticket_panel_config WHERE guild_id=?", (guild_id,)
+        ).fetchone()
+        
+        if existing:
+            return False  # Уже существует
+        
+        # Создаем новую запись
+        conn.execute(
+            "INSERT INTO ticket_panel_config "
+            "(guild_id, title, description, footer, color, banner_url, panel_channel_id, updated_by, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            (
+                guild_id,
+                default_config.get('title', '🎫 Тикеты поддержки'),
+                default_config.get('description', ''),
+                default_config.get('footer', ''),
+                default_config.get('color', 10181046),
+                default_config.get('banner_url', ''),
+                default_config.get('panel_channel_id', 0),
+                now
+            )
+        )
+        
+        return True
 
 
 # ── Ticket Moderator Roles ────────────────────────────────────────────────────

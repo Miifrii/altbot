@@ -268,42 +268,57 @@ class TicketPanelView(discord.ui.View):
             self.add_item(TicketButton(t_type, t_cfg))
 
 
-def build_panel_embeds() -> discord.Embed:
-    p = TICKET_CONFIG["panel"]
-    embed = discord.Embed(
-        title=p.get("title", "🎫 Тикеты поддержки"),
-        description=p.get("description", (
-            "Добро пожаловать в систему обращений.\n"
-            "Выбери подходящую категорию и нажми кнопку ниже — "
-            "мы постараемся помочь как можно скорее.\n\u200b"
-        )),
-        color=p["color"]
-    )
-    for t_cfg in TICKET_CONFIG["types"].values():
-        embed.add_field(
-            name=f"{t_cfg['emoji']} {t_cfg['label']}",
-            value=t_cfg.get("description", ""),
-            inline=False
+async def build_panel_embeds(guild_id: int = None) -> discord.Embed:
+    """
+    Создает embed панели тикетов.
+    
+    Args:
+        guild_id: ID сервера (если None, использует старый конфиг)
+    
+    Returns:
+        discord.Embed: Готовый embed панели
+    """
+    # Если guild_id не передан, используем старый способ (fallback)
+    if guild_id is None:
+        p = TICKET_CONFIG["panel"]
+        embed = discord.Embed(
+            title=p.get("title", "🎫 Тикеты поддержки"),
+            description=p.get("description", (
+                "Добро пожаловать в систему обращений.\n"
+                "Выбери подходящую категорию и нажми кнопку ниже — "
+                "мы постараемся помочь как можно скорее.\n\u200b"
+            )),
+            color=p.get("color", 10181046)  # 0x9B59B6
         )
-    footer = p.get("footer", "⏳ Ответ администрации может занять некоторое время. Спасибо за терпение.")
-    if footer:
-        embed.set_footer(text=footer)
-    return embed
+        for t_cfg in TICKET_CONFIG["types"].values():
+            embed.add_field(
+                name=f"{t_cfg['emoji']} {t_cfg['label']}",
+                value=t_cfg.get("description", ""),
+                inline=False
+            )
+        footer = p.get("footer", "⏳ Ответ администрации может занять некоторое время. Спасибо за терпение.")
+        if footer:
+            embed.set_footer(text=footer)
+        return embed
+    
+    # Новый способ - загружаем из ConfigManager (асинхронно)
+    return await TicketConfigManager.get_panel_embed(guild_id)
 
 
 class PanelEmbedModal(discord.ui.Modal, title="Редактировать панель тикетов"):
-    def __init__(self):
+    def __init__(self, guild_id: int, current_config: dict):
         super().__init__()
-        p = TICKET_CONFIG.get("panel", {})
-        color = p.get("color", 0x9B59B6)
+        
+        color = current_config.get('color', 0x9B59B6)
+        
         self.title_input = discord.ui.TextInput(
             label="Заголовок", max_length=100,
-            default=p.get("title", "🎫 Тикеты поддержки")
+            default=current_config.get('title', '🎫 Тикеты поддержки')
         )
         self.desc_input = discord.ui.TextInput(
             label="Описание", style=discord.TextStyle.paragraph,
             max_length=1000, required=False,
-            default=p.get("description", "")
+            default=current_config.get('description', '')
         )
         self.color_input = discord.ui.TextInput(
             label="Цвет (HEX, например 9B59B6)", max_length=10,
@@ -311,12 +326,13 @@ class PanelEmbedModal(discord.ui.Modal, title="Редактировать пан
         )
         self.footer_input = discord.ui.TextInput(
             label="Footer", max_length=200, required=False,
-            default=p.get("footer", "⏳ Ответ администрации может занять некоторое время.")
+            default=current_config.get('footer', '')
         )
         self.banner_url = discord.ui.TextInput(
             label="URL баннера (необязательно)", max_length=300, required=False,
-            default=p.get("banner_url", "")
+            default=current_config.get('banner_url', '')
         )
+        
         self.add_item(self.title_input)
         self.add_item(self.desc_input)
         self.add_item(self.color_input)
@@ -324,32 +340,58 @@ class PanelEmbedModal(discord.ui.Modal, title="Редактировать пан
         self.add_item(self.banner_url)
 
     async def on_submit(self, interaction: discord.Interaction):
-        p = TICKET_CONFIG.setdefault("panel", {})
-        p["title"]       = self.title_input.value
-        p["description"] = self.desc_input.value
-        p["footer"]      = self.footer_input.value
-        p["banner_url"]  = self.banner_url.value.strip()
+        # Парсим цвет
         try:
-            p["color"] = int(self.color_input.value.strip().lstrip("#"), 16)
+            color = int(self.color_input.value.strip().lstrip("#"), 16)
         except ValueError:
             return await interaction.response.send_message("❌ Неверный HEX цвет.", ephemeral=True)
-
-        channel = interaction.guild.get_channel(TICKET_CONFIG.get("panel_channel_id", 0))
-        msg_id  = TICKET_CONFIG.get("panel_message_id", 0)
-        updated = False
-        if channel and msg_id:
-            try:
-                msg = await channel.fetch_message(msg_id)
-                await msg.edit(embed=build_panel_embeds(), view=TicketPanelView())
-                updated = True
-            except discord.NotFound:
-                pass
-
-        text = "✅ Embed обновлён." if updated else "✅ Настройки сохранены. Используй /panel чтобы отправить панель заново."
-        await interaction.response.send_message(
-            embed=discord.Embed(description=text, color=discord.Color.green()),
-            ephemeral=True
+        
+        # Сохраняем в БД через ConfigManager
+        success, message = await TicketConfigManager.update_panel_config(
+            interaction.guild.id,
+            interaction.user.id,
+            title=self.title_input.value,
+            description=self.desc_input.value,
+            footer=self.footer_input.value,
+            banner_url=self.banner_url.value.strip(),
+            color=color
         )
+        
+        if not success:
+            return await interaction.response.send_message(message, ephemeral=True)
+        
+        # Обновляем сообщение панели если оно существует
+        config = await TicketConfigManager.get_panel_config(interaction.guild.id)
+        channel_id = config.get('panel_channel_id', 0)
+        message_id = config.get('panel_message_id', 0)
+        
+        updated = False
+        if channel_id and message_id:
+            channel = interaction.guild.get_channel(channel_id)
+            if channel:
+                try:
+                    msg = await channel.fetch_message(message_id)
+                    await msg.edit(embed=await build_panel_embeds(interaction.guild.id), view=TicketPanelView())
+                    updated = True
+                except discord.NotFound:
+                    pass
+        
+        if updated:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description="✅ Панель обновлена.",
+                    color=discord.Color.green()
+                ),
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description="✅ Настройки сохранены. Отправьте панель заново командой `/panel`.",
+                    color=discord.Color.green()
+                ),
+                ephemeral=True
+            )
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
         import traceback; traceback.print_exc()
@@ -373,18 +415,46 @@ class TicketsCore(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def send_panel(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        channel_id = TICKET_CONFIG["panel_channel_id"]
-        channel = interaction.guild.get_channel(channel_id) if channel_id else interaction.channel
+        
+        # Получаем конфиг панели
+        config = await TicketConfigManager.get_panel_config(interaction.guild.id)
+        
+        # Определяем канал для отправки
+        channel_id = config.get('panel_channel_id', 0)
+        if channel_id:
+            channel = interaction.guild.get_channel(channel_id)
+            if not channel:
+                channel = interaction.channel
+        else:
+            channel = interaction.channel
+        
+        if not channel:
+            return await interaction.followup.send(
+                embed=discord.Embed(description="❌ Не удалось определить канал для отправки панели", color=discord.Color.red()),
+                ephemeral=True
+            )
 
         # Если есть баннер — отправляем его отдельным embed сверху
-        banner_url = TICKET_CONFIG.get("panel", {}).get("banner_url", "")
+        banner_url = config.get('banner_url', '')
         if banner_url:
-            banner_embed = discord.Embed(color=TICKET_CONFIG["panel"]["color"])
-            banner_embed.set_image(url=banner_url)
-            await channel.send(embed=banner_embed)
+            try:
+                banner_embed = discord.Embed(color=config.get('color', 10181046))
+                banner_embed.set_image(url=banner_url)
+                await channel.send(embed=banner_embed)
+            except Exception as e:
+                print(f"[PANEL] Ошибка отправки баннера: {e}")
 
-        msg = await channel.send(embed=build_panel_embeds(), view=TicketPanelView())
-        TICKET_CONFIG["panel_message_id"] = msg.id
+        # Отправляем панель
+        panel_embed = await build_panel_embeds(interaction.guild.id)
+        msg = await channel.send(embed=panel_embed, view=TicketPanelView())
+        
+        # Сохраняем ID сообщения в БД
+        await TicketConfigManager.update_panel_config(
+            interaction.guild.id,
+            interaction.user.id,
+            panel_channel_id=channel.id,
+            panel_message_id=msg.id
+        )
         
         await interaction.followup.send(
             embed=discord.Embed(description=f"✅ Панель отправлена в {channel.mention}", color=discord.Color.green()),
@@ -394,7 +464,9 @@ class TicketsCore(commands.Cog):
     @app_commands.command(name="embed_edit", description="Редактировать embed панели тикетов")
     @app_commands.default_permissions(administrator=True)
     async def embed_edit(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(PanelEmbedModal())
+        # Загружаем текущий конфиг из БД
+        config = await TicketConfigManager.get_panel_config(interaction.guild.id)
+        await interaction.response.send_modal(PanelEmbedModal(interaction.guild.id, config))
 
 
 async def setup_core(bot: commands.Bot):

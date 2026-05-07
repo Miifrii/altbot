@@ -1,6 +1,6 @@
 """
-Менеджер конфигурации ролей модераторов тикетов.
-Обеспечивает централизованное управление правами доступа к тикетам.
+Менеджер конфигурации ролей модераторов тикетов и настроек панели.
+Обеспечивает централизованное управление правами доступа к тикетам и конфигурацией панели.
 """
 
 import discord
@@ -8,18 +8,24 @@ from typing import Optional, Dict, List, Set
 from database import (
     add_ticket_moderator_role, remove_ticket_moderator_role,
     get_ticket_moderator_roles, get_all_ticket_moderator_roles,
-    cleanup_deleted_roles, migrate_ticket_roles_from_config
+    cleanup_deleted_roles, migrate_ticket_roles_from_config,
+    get_panel_config, update_panel_config, init_default_panel_config
 )
 from .config import TICKET_CONFIG
 
 
 class TicketConfigManager:
-    """Менеджер конфигурации ролей модераторов тикетов."""
+    """Менеджер конфигурации ролей модераторов тикетов и настроек панели."""
     
     # Кэш ролей: guild_id -> {ticket_type -> set(role_ids)}
     _role_cache: Dict[int, Dict[str, Set[int]]] = {}
     _cache_timestamps: Dict[int, float] = {}
     _cache_ttl = 300  # 5 минут
+    
+    # Кэш конфигурации панели: guild_id -> config_dict
+    _panel_cache: Dict[int, Dict] = {}
+    _panel_cache_timestamps: Dict[int, float] = {}
+    _panel_cache_ttl = 300  # 5 минут
     
     @classmethod
     async def add_moderator_role(cls, guild: discord.Guild, ticket_type: str, 
@@ -229,3 +235,150 @@ class TicketConfigManager:
     def get_ticket_type_label(cls, ticket_type: str) -> str:
         """Возвращает человекочитаемое название типа тикета."""
         return TICKET_CONFIG["types"].get(ticket_type, {}).get("label", ticket_type)
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Методы для работы с конфигурацией панели тикетов
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    @classmethod
+    async def get_panel_config(cls, guild_id: int) -> Dict:
+        """
+        Получает конфигурацию панели тикетов с кэшированием и автоматической миграцией.
+        
+        Логика:
+        1. Проверяем кэш
+        2. Загружаем из БД
+        3. Если в БД нет - автоматически импортируем из TICKET_CONFIG
+        4. Возвращаем конфиг
+        
+        Returns:
+            Dict: Конфигурация панели
+        """
+        import time
+        
+        # Проверяем кэш
+        current_time = time.time()
+        if (guild_id in cls._panel_cache and 
+            guild_id in cls._panel_cache_timestamps and
+            current_time - cls._panel_cache_timestamps[guild_id] < cls._panel_cache_ttl):
+            return cls._panel_cache[guild_id].copy()
+        
+        # Загружаем из БД
+        db_row = get_panel_config(guild_id)
+        
+        if db_row:
+            # Конвертируем Row в dict
+            config = {
+                'title': db_row['title'],
+                'description': db_row['description'] or '',
+                'footer': db_row['footer'] or '',
+                'color': db_row['color'],
+                'banner_url': db_row['banner_url'] or '',
+                'panel_channel_id': db_row['panel_channel_id'] or 0,
+                'panel_message_id': db_row['panel_message_id'] or 0,
+            }
+        else:
+            # Автоматическая миграция из старого конфига
+            config = cls._get_default_panel_config()
+            init_default_panel_config(guild_id, config)
+            print(f"[PANEL] Автоматически создан конфиг панели для guild {guild_id}")
+        
+        # Обновляем кэш
+        cls._panel_cache[guild_id] = config.copy()
+        cls._panel_cache_timestamps[guild_id] = current_time
+        
+        return config
+    
+    @classmethod
+    async def update_panel_config(cls, guild_id: int, updated_by: int, **kwargs) -> tuple[bool, str]:
+        """
+        Обновляет конфигурацию панели тикетов.
+        
+        Args:
+            guild_id: ID сервера
+            updated_by: ID пользователя, который обновляет
+            **kwargs: Поля для обновления
+        
+        Returns:
+            tuple[bool, str]: (успех, сообщение)
+        """
+        # Валидация цвета если передан
+        if 'color' in kwargs:
+            color = kwargs['color']
+            if not isinstance(color, int) or color < 0 or color > 0xFFFFFF:
+                return False, "❌ Неверный формат цвета. Используйте HEX значение (например, 0x9B59B6)"
+        
+        # Обновляем в БД
+        success = update_panel_config(guild_id, updated_by, **kwargs)
+        
+        if success:
+            # Очищаем кэш
+            cls._clear_panel_cache(guild_id)
+            return True, "✅ Конфигурация панели обновлена"
+        else:
+            return False, "❌ Не удалось обновить конфигурацию панели"
+    
+    @classmethod
+    async def get_panel_embed(cls, guild_id: int) -> discord.Embed:
+        """
+        Генерирует embed панели тикетов на основе конфигурации из БД.
+        
+        Args:
+            guild_id: ID сервера
+        
+        Returns:
+            discord.Embed: Готовый embed панели
+        """
+        config = await cls.get_panel_config(guild_id)
+        
+        # Создаем embed
+        embed = discord.Embed(
+            title=config.get('title', '🎫 Тикеты поддержки'),
+            description=config.get('description', '') or (
+                "Добро пожаловать в систему обращений.\n"
+                "Выбери подходящую категорию и нажми кнопку ниже — "
+                "мы постараемся помочь как можно скорее.\n\u200b"
+            ),
+            color=config.get('color', 10181046)
+        )
+        
+        # Добавляем типы тикетов
+        for t_cfg in TICKET_CONFIG["types"].values():
+            embed.add_field(
+                name=f"{t_cfg['emoji']} {t_cfg['label']}",
+                value=t_cfg.get("description", ""),
+                inline=False
+            )
+        
+        # Footer
+        footer = config.get('footer', '')
+        if footer:
+            embed.set_footer(text=footer)
+        
+        return embed
+    
+    @classmethod
+    def _get_default_panel_config(cls) -> Dict:
+        """
+        Возвращает дефолтную конфигурацию панели из TICKET_CONFIG.
+        
+        Returns:
+            Dict: Дефолтная конфигурация
+        """
+        old_panel = TICKET_CONFIG.get("panel", {})
+        
+        return {
+            'title': old_panel.get('title', '🎫 Тикеты поддержки'),
+            'description': old_panel.get('description', ''),
+            'footer': old_panel.get('footer', '⏳ Ответ администрации может занять некоторое время. Спасибо за терпение.'),
+            'color': old_panel.get('color', 10181046),  # 0x9B59B6
+            'banner_url': old_panel.get('banner_url', ''),
+            'panel_channel_id': TICKET_CONFIG.get('panel_channel_id', 0),
+            'panel_message_id': TICKET_CONFIG.get('panel_message_id', 0),
+        }
+    
+    @classmethod
+    def _clear_panel_cache(cls, guild_id: int) -> None:
+        """Очищает кэш конфигурации панели для сервера."""
+        cls._panel_cache.pop(guild_id, None)
+        cls._panel_cache_timestamps.pop(guild_id, None)
