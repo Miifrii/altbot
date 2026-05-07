@@ -7,6 +7,7 @@ from database import init_db, migrate_from_json, init_departments
 COGS = [
     "cogs.roles",
     "cogs.tickets.loader",
+    "cogs.tickets.mod_commands",  # Новый cog с командами управления ролями
     "cogs.utils",
     "cogs.reviews",
 ]

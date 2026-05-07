@@ -109,6 +109,36 @@ def init_db():
             to_level    INTEGER NOT NULL,
             FOREIGN KEY (dept_id) REFERENCES departments(id)
         );
+
+        CREATE TABLE IF NOT EXISTS ticket_moderator_roles (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id    INTEGER NOT NULL,
+            ticket_type TEXT    NOT NULL,
+            role_id     INTEGER NOT NULL,
+            added_by    INTEGER NOT NULL,
+            added_at    TEXT    NOT NULL,
+            UNIQUE(guild_id, ticket_type, role_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ticket_mod_roles_guild_type 
+        ON ticket_moderator_roles(guild_id, ticket_type);
+
+        CREATE TABLE IF NOT EXISTS ticket_panel_config (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id         INTEGER NOT NULL UNIQUE,
+            title            TEXT    NOT NULL DEFAULT '🎫 Тикеты поддержки',
+            description      TEXT,
+            footer           TEXT,
+            color            INTEGER NOT NULL DEFAULT 10181046,
+            banner_url       TEXT,
+            panel_channel_id INTEGER,
+            panel_message_id INTEGER,
+            updated_by       INTEGER,
+            updated_at       TEXT    NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_panel_config_guild 
+        ON ticket_panel_config(guild_id);
         """)
         
         # Миграция схемы: добавляем form_data если её нет
@@ -122,6 +152,18 @@ def init_db():
             print(f"[DB] Ошибка миграции схемы: {e}")
             
     print("[DB] База данных инициализирована.")
+    
+    # Автоматическая миграция ролей модераторов при первом запуске
+    try:
+        from cogs.tickets.config_manager import TicketConfigManager
+        # Проверяем есть ли уже роли в БД
+        with get_conn() as conn:
+            count = conn.execute("SELECT COUNT(*) as cnt FROM ticket_moderator_roles").fetchone()["cnt"]
+            if count == 0:
+                print("[DB] Роли модераторов не найдены, выполняется автоматическая миграция...")
+                # Миграция будет выполнена при первом обращении к TicketConfigManager
+    except Exception as e:
+        print(f"[DB] Предупреждение при проверке миграции: {e}")
 
 
 # ── Tickets ───────────────────────────────────────────────────────────────────
@@ -437,6 +479,225 @@ def get_department_roles(dept_id: str) -> list[int]:
             "SELECT role_id FROM department_roles WHERE dept_id=? AND role_id != 0", (dept_id,)
         ).fetchall()
         return [row["role_id"] for row in rows]
+
+
+# ── Ticket Panel Config ───────────────────────────────────────────────────────
+
+def get_panel_config(guild_id: int) -> Optional[sqlite3.Row]:
+    """Получает конфигурацию панели тикетов для сервера."""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM ticket_panel_config WHERE guild_id=?", (guild_id,)
+        ).fetchone()
+
+
+def update_panel_config(guild_id: int, updated_by: int, **kwargs) -> bool:
+    """
+    Обновляет конфигурацию панели тикетов.
+    
+    Args:
+        guild_id: ID сервера
+        updated_by: ID пользователя, который обновляет
+        **kwargs: Поля для обновления (title, description, footer, color, banner_url, etc.)
+    
+    Returns:
+        bool: True если обновлено, False если ошибка
+    """
+    from datetime import datetime
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    
+    # Разрешенные поля для обновления
+    allowed_fields = {
+        'title', 'description', 'footer', 'color', 
+        'banner_url', 'panel_channel_id', 'panel_message_id'
+    }
+    
+    # Фильтруем только разрешенные поля
+    updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
+    
+    if not updates:
+        return False
+    
+    # Добавляем метаданные
+    updates['updated_by'] = updated_by
+    updates['updated_at'] = now
+    
+    with get_conn() as conn:
+        # Проверяем существует ли запись
+        existing = conn.execute(
+            "SELECT id FROM ticket_panel_config WHERE guild_id=?", (guild_id,)
+        ).fetchone()
+        
+        if existing:
+            # UPDATE существующей записи
+            set_clause = ', '.join(f"{k}=?" for k in updates.keys())
+            values = list(updates.values()) + [guild_id]
+            conn.execute(
+                f"UPDATE ticket_panel_config SET {set_clause} WHERE guild_id=?",
+                values
+            )
+        else:
+            # INSERT новой записи
+            updates['guild_id'] = guild_id
+            columns = ', '.join(updates.keys())
+            placeholders = ', '.join('?' * len(updates))
+            conn.execute(
+                f"INSERT INTO ticket_panel_config ({columns}) VALUES ({placeholders})",
+                list(updates.values())
+            )
+        
+        return True
+
+
+def init_default_panel_config(guild_id: int, default_config: dict) -> bool:
+    """
+    Создает дефолтную конфигурацию панели для сервера.
+    
+    Args:
+        guild_id: ID сервера
+        default_config: Словарь с дефолтными значениями
+    
+    Returns:
+        bool: True если создано, False если уже существует
+    """
+    from datetime import datetime
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    
+    with get_conn() as conn:
+        # Проверяем существует ли уже конфиг
+        existing = conn.execute(
+            "SELECT id FROM ticket_panel_config WHERE guild_id=?", (guild_id,)
+        ).fetchone()
+        
+        if existing:
+            return False  # Уже существует
+        
+        # Создаем новую запись
+        conn.execute(
+            "INSERT INTO ticket_panel_config "
+            "(guild_id, title, description, footer, color, banner_url, panel_channel_id, updated_by, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            (
+                guild_id,
+                default_config.get('title', '🎫 Тикеты поддержки'),
+                default_config.get('description', ''),
+                default_config.get('footer', ''),
+                default_config.get('color', 10181046),
+                default_config.get('banner_url', ''),
+                default_config.get('panel_channel_id', 0),
+                now
+            )
+        )
+        
+        return True
+
+
+# ── Ticket Moderator Roles ────────────────────────────────────────────────────
+
+def add_ticket_moderator_role(guild_id: int, ticket_type: str, role_id: int, added_by: int) -> bool:
+    """Добавляет роль модератора для типа тикета. Возвращает True если добавлено, False если уже существует."""
+    from datetime import datetime
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    
+    with get_conn() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO ticket_moderator_roles (guild_id, ticket_type, role_id, added_by, added_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (guild_id, ticket_type, role_id, added_by, now)
+            )
+            return True
+        except sqlite3.IntegrityError:
+            # Роль уже существует для этого типа тикета
+            return False
+
+
+def remove_ticket_moderator_role(guild_id: int, ticket_type: str, role_id: int) -> bool:
+    """Удаляет роль модератора для типа тикета. Возвращает True если удалено, False если не найдено."""
+    with get_conn() as conn:
+        cursor = conn.execute(
+            "DELETE FROM ticket_moderator_roles WHERE guild_id=? AND ticket_type=? AND role_id=?",
+            (guild_id, ticket_type, role_id)
+        )
+        return cursor.rowcount > 0
+
+
+def get_ticket_moderator_roles(guild_id: int, ticket_type: str) -> set[int]:
+    """Получает множество ID ролей модераторов для типа тикета."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT role_id FROM ticket_moderator_roles WHERE guild_id=? AND ticket_type=?",
+            (guild_id, ticket_type)
+        ).fetchall()
+        return {row["role_id"] for row in rows}
+
+
+def get_all_ticket_moderator_roles(guild_id: int) -> dict[str, list[dict]]:
+    """Получает все роли модераторов для всех типов тикетов на сервере."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT ticket_type, role_id, added_by, added_at FROM ticket_moderator_roles "
+            "WHERE guild_id=? ORDER BY ticket_type, added_at",
+            (guild_id,)
+        ).fetchall()
+        
+        result = {}
+        for row in rows:
+            ticket_type = row["ticket_type"]
+            if ticket_type not in result:
+                result[ticket_type] = []
+            result[ticket_type].append({
+                "role_id": row["role_id"],
+                "added_by": row["added_by"],
+                "added_at": row["added_at"]
+            })
+        return result
+
+
+def cleanup_deleted_roles(guild_id: int, existing_role_ids: set[int]) -> int:
+    """Удаляет роли модераторов, которые больше не существуют на сервере. Возвращает количество удаленных."""
+    if not existing_role_ids:
+        return 0
+        
+    with get_conn() as conn:
+        # Получаем все роли из БД для этого сервера
+        db_roles = conn.execute(
+            "SELECT role_id FROM ticket_moderator_roles WHERE guild_id=?", (guild_id,)
+        ).fetchall()
+        
+        deleted_count = 0
+        for row in db_roles:
+            role_id = row["role_id"]
+            if role_id not in existing_role_ids:
+                conn.execute(
+                    "DELETE FROM ticket_moderator_roles WHERE guild_id=? AND role_id=?",
+                    (guild_id, role_id)
+                )
+                deleted_count += 1
+        
+        return deleted_count
+
+
+def migrate_ticket_roles_from_config(guild_id: int, config_roles: dict[str, list[int]]) -> int:
+    """Мигрирует роли модераторов из старого конфига в БД. Возвращает количество добавленных ролей."""
+    migrated_count = 0
+    
+    with get_conn() as conn:
+        for ticket_type, role_ids in config_roles.items():
+            for role_id in role_ids:
+                try:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO ticket_moderator_roles "
+                        "(guild_id, ticket_type, role_id, added_by, added_at) "
+                        "VALUES (?, ?, ?, 0, 'Migrated from config')",
+                        (guild_id, ticket_type, role_id)
+                    )
+                    if conn.total_changes > 0:
+                        migrated_count += 1
+                except Exception:
+                    continue
+    
+    return migrated_count
 
 
 # ── Ticket Roles ──────────────────────────────────────────────────────────────

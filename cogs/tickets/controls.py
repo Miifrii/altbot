@@ -2,6 +2,7 @@ import discord
 import json
 from .transcript import generate_transcript
 from .config import TICKET_CONFIG
+from .permissions import is_ticket_moderator
 from database import claim_ticket as db_claim_ticket, close_ticket as db_close_ticket, get_ticket_by_channel
 
 
@@ -27,18 +28,16 @@ def build_ticket_embed(ticket_data: dict, status: str, assignee: discord.Member 
 
 
 def _is_mod(interaction: discord.Interaction, ticket_data: dict = None) -> bool:
-    """Администратор — полный доступ. Иначе проверяем role_ids из конфига тикета."""
-    member = interaction.user
-    if member.guild_permissions.administrator:
-        return True
-    if ticket_data:
-        t_type = ticket_data.get("type", "")
-        t_cfg = TICKET_CONFIG.get("types", {}).get(t_type, {})
-        role_ids = t_cfg.get("role_ids", [t_cfg.get("role_id", 0)])
-        member_role_ids = {r.id for r in member.roles}
-        if any(rid in member_role_ids for rid in role_ids):
-            return True
-    return False
+    """Администратор — полный доступ. Иначе проверяем роли из новой системы управления."""
+    # Используем новую асинхронную систему проверки прав
+    # Для совместимости делаем синхронную обертку
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(is_ticket_moderator(interaction, ticket_data))
+    except RuntimeError:
+        # Если нет активного event loop, создаем новый
+        return asyncio.run(is_ticket_moderator(interaction, ticket_data))
 
 
 class CloseModal(discord.ui.Modal, title="Закрытие тикета"):
