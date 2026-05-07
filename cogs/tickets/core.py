@@ -343,6 +343,11 @@ class PanelEmbedModal(discord.ui.Modal, title="Редактировать пан
         # Парсим цвет
         try:
             color = int(self.color_input.value.strip().lstrip("#"), 16)
+            # Проверяем диапазон (0x000000 - 0xFFFFFF)
+            if color < 0 or color > 0xFFFFFF:
+                return await interaction.response.send_message(
+                    "❌ Цвет должен быть в диапазоне 000000-FFFFFF.", ephemeral=True
+                )
         except ValueError:
             return await interaction.response.send_message("❌ Неверный HEX цвет.", ephemeral=True)
         
@@ -416,50 +421,60 @@ class TicketsCore(commands.Cog):
     async def send_panel(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        # Получаем конфиг панели
-        config = await TicketConfigManager.get_panel_config(interaction.guild.id)
-        
-        # Определяем канал для отправки
-        channel_id = config.get('panel_channel_id', 0)
-        if channel_id:
-            channel = interaction.guild.get_channel(channel_id)
-            if not channel:
+        try:
+            # Получаем конфиг панели
+            config = await TicketConfigManager.get_panel_config(interaction.guild.id)
+            
+            # Определяем канал для отправки
+            channel_id = config.get('panel_channel_id', 0)
+            if channel_id:
+                channel = interaction.guild.get_channel(channel_id)
+                if not channel:
+                    channel = interaction.channel
+            else:
                 channel = interaction.channel
-        else:
-            channel = interaction.channel
-        
-        if not channel:
-            return await interaction.followup.send(
-                embed=discord.Embed(description="❌ Не удалось определить канал для отправки панели", color=discord.Color.red()),
+            
+            if not channel:
+                return await interaction.followup.send(
+                    embed=discord.Embed(description="❌ Не удалось определить канал для отправки панели", color=discord.Color.red()),
+                    ephemeral=True
+                )
+
+            # Если есть баннер — отправляем его отдельным embed сверху
+            banner_url = config.get('banner_url', '')
+            if banner_url:
+                try:
+                    banner_embed = discord.Embed(color=config.get('color', 10181046))
+                    banner_embed.set_image(url=banner_url)
+                    await channel.send(embed=banner_embed)
+                except Exception as e:
+                    print(f"[PANEL] Ошибка отправки баннера: {e}")
+
+            # Отправляем панель
+            panel_embed = await build_panel_embeds(interaction.guild.id)
+            msg = await channel.send(embed=panel_embed, view=TicketPanelView())
+            
+            # Сохраняем ID сообщения в БД
+            await TicketConfigManager.update_panel_config(
+                interaction.guild.id,
+                interaction.user.id,
+                panel_channel_id=channel.id,
+                panel_message_id=msg.id
+            )
+            
+            await interaction.followup.send(
+                embed=discord.Embed(description=f"✅ Панель отправлена в {channel.mention}", color=discord.Color.green()),
                 ephemeral=True
             )
-
-        # Если есть баннер — отправляем его отдельным embed сверху
-        banner_url = config.get('banner_url', '')
-        if banner_url:
-            try:
-                banner_embed = discord.Embed(color=config.get('color', 10181046))
-                banner_embed.set_image(url=banner_url)
-                await channel.send(embed=banner_embed)
-            except Exception as e:
-                print(f"[PANEL] Ошибка отправки баннера: {e}")
-
-        # Отправляем панель
-        panel_embed = await build_panel_embeds(interaction.guild.id)
-        msg = await channel.send(embed=panel_embed, view=TicketPanelView())
-        
-        # Сохраняем ID сообщения в БД
-        await TicketConfigManager.update_panel_config(
-            interaction.guild.id,
-            interaction.user.id,
-            panel_channel_id=channel.id,
-            panel_message_id=msg.id
-        )
-        
-        await interaction.followup.send(
-            embed=discord.Embed(description=f"✅ Панель отправлена в {channel.mention}", color=discord.Color.green()),
-            ephemeral=True
-        )
+        except Exception as e:
+            print(f"[PANEL] Ошибка отправки панели: {e}")
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    description=f"❌ Ошибка при отправке панели: {str(e)}",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
 
     @app_commands.command(name="embed_edit", description="Редактировать embed панели тикетов")
     @app_commands.default_permissions(administrator=True)
