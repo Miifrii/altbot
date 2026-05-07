@@ -19,8 +19,9 @@ TICKET_CONFIG = {
             "style": "secondary",
             "description": "Пожаловаться на участника сервера за нарушение правил.",
             "category_id": CONFIG["categories"]["complaints"],
-            "role_ids": [CONFIG["roles"]["admin_dept"], CONFIG["roles"]["moderator"]],
             "name_prefix": "жалоба",
+            # DEPRECATED: role_ids теперь управляются через /ticketmod команды
+            "role_ids": [CONFIG["roles"]["admin_dept"], CONFIG["roles"]["moderator"]],  # Fallback для миграции
         },
         "appeal": {
             "label": "Обжалование",
@@ -28,8 +29,9 @@ TICKET_CONFIG = {
             "style": "secondary",
             "description": "Обжаловать выданное наказание.",
             "category_id": CONFIG["categories"]["appeals"],
-            "role_ids": [CONFIG["roles"]["admin_dept"], CONFIG["roles"]["moderator"]],
             "name_prefix": "обжалование",
+            # DEPRECATED: role_ids теперь управляются через /ticketmod команды
+            "role_ids": [CONFIG["roles"]["admin_dept"], CONFIG["roles"]["moderator"]],  # Fallback для миграции
         },
         "reschedule": {
             "label": "Перенос времени",
@@ -37,8 +39,9 @@ TICKET_CONFIG = {
             "style": "secondary",
             "description": "Запросить перенос времени с другого сервера.",
             "category_id": CONFIG["categories"]["general"],
-            "role_ids": [CONFIG["roles"]["moderator"]],
             "name_prefix": "перенос",
+            # DEPRECATED: role_ids теперь управляются через /ticketmod команды
+            "role_ids": [CONFIG["roles"]["moderator"]],  # Fallback для миграции
         },
         "verify": {
             "label": "Верификация возраста",
@@ -46,8 +49,9 @@ TICKET_CONFIG = {
             "style": "secondary",
             "description": "Пройти верификацию возраста.",
             "category_id": CONFIG["categories"]["general"],
-            "role_ids": [CONFIG["roles"]["moderator"]],
             "name_prefix": "верификация",
+            # DEPRECATED: role_ids теперь управляются через /ticketmod команды
+            "role_ids": [CONFIG["roles"]["moderator"]],  # Fallback для миграции
         },
         "other": {
             "label": "Другое",
@@ -55,8 +59,9 @@ TICKET_CONFIG = {
             "style": "secondary",
             "description": "Любой другой вопрос, не подходящий под остальные категории.",
             "category_id": CONFIG["categories"]["general"],
-            "role_ids": [CONFIG["roles"]["moderator"]],
             "name_prefix": "другое",
+            # DEPRECATED: role_ids теперь управляются через /ticketmod команды
+            "role_ids": [CONFIG["roles"]["moderator"]],  # Fallback для миграции
         },
     }
 }

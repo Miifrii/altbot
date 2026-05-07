@@ -7,6 +7,7 @@ from discord import app_commands
 from datetime import datetime
 from .config import TICKET_CONFIG
 from .controls import TicketControlView, build_ticket_embed
+from .config_manager import TicketConfigManager
 from database import create_ticket as db_create_ticket, next_ticket_id, check_cooldown, get_active_ticket
 
 
@@ -76,10 +77,18 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
             user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
             guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
         }
-        for role_id in type_cfg.get("role_ids", [type_cfg.get("role_id", 0)]):
+        
+        # Получаем роли модераторов из новой системы
+        moderator_role_ids = await TicketConfigManager.get_moderator_roles(guild.id, ticket_type)
+        
+        # Добавляем права для ролей модераторов
+        for role_id in moderator_role_ids:
             mod_role = guild.get_role(role_id)
             if mod_role:
-                overwrites[mod_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+                overwrites[mod_role] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True
+                )
+        
         channel = await guild.create_text_channel(
             name=f"{type_cfg['name_prefix']}-{ticket_id}",
             category=category,

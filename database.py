@@ -109,6 +109,19 @@ def init_db():
             to_level    INTEGER NOT NULL,
             FOREIGN KEY (dept_id) REFERENCES departments(id)
         );
+
+        CREATE TABLE IF NOT EXISTS ticket_moderator_roles (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id    INTEGER NOT NULL,
+            ticket_type TEXT    NOT NULL,
+            role_id     INTEGER NOT NULL,
+            added_by    INTEGER NOT NULL,
+            added_at    TEXT    NOT NULL,
+            UNIQUE(guild_id, ticket_type, role_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ticket_mod_roles_guild_type 
+        ON ticket_moderator_roles(guild_id, ticket_type);
         """)
         
         # Миграция схемы: добавляем form_data если её нет
@@ -122,6 +135,18 @@ def init_db():
             print(f"[DB] Ошибка миграции схемы: {e}")
             
     print("[DB] База данных инициализирована.")
+    
+    # Автоматическая миграция ролей модераторов при первом запуске
+    try:
+        from cogs.tickets.config_manager import TicketConfigManager
+        # Проверяем есть ли уже роли в БД
+        with get_conn() as conn:
+            count = conn.execute("SELECT COUNT(*) as cnt FROM ticket_moderator_roles").fetchone()["cnt"]
+            if count == 0:
+                print("[DB] Роли модераторов не найдены, выполняется автоматическая миграция...")
+                # Миграция будет выполнена при первом обращении к TicketConfigManager
+    except Exception as e:
+        print(f"[DB] Предупреждение при проверке миграции: {e}")
 
 
 # ── Tickets ───────────────────────────────────────────────────────────────────
@@ -437,6 +462,114 @@ def get_department_roles(dept_id: str) -> list[int]:
             "SELECT role_id FROM department_roles WHERE dept_id=? AND role_id != 0", (dept_id,)
         ).fetchall()
         return [row["role_id"] for row in rows]
+
+
+# ── Ticket Moderator Roles ────────────────────────────────────────────────────
+
+def add_ticket_moderator_role(guild_id: int, ticket_type: str, role_id: int, added_by: int) -> bool:
+    """Добавляет роль модератора для типа тикета. Возвращает True если добавлено, False если уже существует."""
+    from datetime import datetime
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    
+    with get_conn() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO ticket_moderator_roles (guild_id, ticket_type, role_id, added_by, added_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (guild_id, ticket_type, role_id, added_by, now)
+            )
+            return True
+        except sqlite3.IntegrityError:
+            # Роль уже существует для этого типа тикета
+            return False
+
+
+def remove_ticket_moderator_role(guild_id: int, ticket_type: str, role_id: int) -> bool:
+    """Удаляет роль модератора для типа тикета. Возвращает True если удалено, False если не найдено."""
+    with get_conn() as conn:
+        cursor = conn.execute(
+            "DELETE FROM ticket_moderator_roles WHERE guild_id=? AND ticket_type=? AND role_id=?",
+            (guild_id, ticket_type, role_id)
+        )
+        return cursor.rowcount > 0
+
+
+def get_ticket_moderator_roles(guild_id: int, ticket_type: str) -> set[int]:
+    """Получает множество ID ролей модераторов для типа тикета."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT role_id FROM ticket_moderator_roles WHERE guild_id=? AND ticket_type=?",
+            (guild_id, ticket_type)
+        ).fetchall()
+        return {row["role_id"] for row in rows}
+
+
+def get_all_ticket_moderator_roles(guild_id: int) -> dict[str, list[dict]]:
+    """Получает все роли модераторов для всех типов тикетов на сервере."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT ticket_type, role_id, added_by, added_at FROM ticket_moderator_roles "
+            "WHERE guild_id=? ORDER BY ticket_type, added_at",
+            (guild_id,)
+        ).fetchall()
+        
+        result = {}
+        for row in rows:
+            ticket_type = row["ticket_type"]
+            if ticket_type not in result:
+                result[ticket_type] = []
+            result[ticket_type].append({
+                "role_id": row["role_id"],
+                "added_by": row["added_by"],
+                "added_at": row["added_at"]
+            })
+        return result
+
+
+def cleanup_deleted_roles(guild_id: int, existing_role_ids: set[int]) -> int:
+    """Удаляет роли модераторов, которые больше не существуют на сервере. Возвращает количество удаленных."""
+    if not existing_role_ids:
+        return 0
+        
+    with get_conn() as conn:
+        # Получаем все роли из БД для этого сервера
+        db_roles = conn.execute(
+            "SELECT role_id FROM ticket_moderator_roles WHERE guild_id=?", (guild_id,)
+        ).fetchall()
+        
+        deleted_count = 0
+        for row in db_roles:
+            role_id = row["role_id"]
+            if role_id not in existing_role_ids:
+                conn.execute(
+                    "DELETE FROM ticket_moderator_roles WHERE guild_id=? AND role_id=?",
+                    (guild_id, role_id)
+                )
+                deleted_count += 1
+        
+        return deleted_count
+
+
+def migrate_ticket_roles_from_config(guild_id: int, config_roles: dict[str, list[int]]) -> int:
+    """Мигрирует роли модераторов из старого конфига в БД. Возвращает количество добавленных ролей."""
+    migrated_count = 0
+    
+    with get_conn() as conn:
+        for ticket_type, role_ids in config_roles.items():
+            for role_id in role_ids:
+                try:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO ticket_moderator_roles "
+                        "(guild_id, ticket_type, role_id, added_by, added_at) "
+                        "VALUES (?, ?, ?, 0, 'Migrated from config')",
+                        (guild_id, ticket_type, role_id)
+                    )
+                    if conn.total_changes > 0:
+                        migrated_count += 1
+                except Exception:
+                    continue
+    
+    return migrated_count
 
 
 # ── Ticket Roles ──────────────────────────────────────────────────────────────
