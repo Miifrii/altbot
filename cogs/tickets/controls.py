@@ -27,17 +27,9 @@ def build_ticket_embed(ticket_data: dict, status: str, assignee: discord.Member 
     return embed
 
 
-def _is_mod(interaction: discord.Interaction, ticket_data: dict = None) -> bool:
+async def _is_mod(interaction: discord.Interaction, ticket_data: dict = None) -> bool:
     """Администратор — полный доступ. Иначе проверяем роли из новой системы управления."""
-    # Используем новую асинхронную систему проверки прав
-    # Для совместимости делаем синхронную обертку
-    import asyncio
-    try:
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(is_ticket_moderator(interaction, ticket_data))
-    except RuntimeError:
-        # Если нет активного event loop, создаем новый
-        return asyncio.run(is_ticket_moderator(interaction, ticket_data))
+    return await is_ticket_moderator(interaction, ticket_data)
 
 
 class CloseModal(discord.ui.Modal, title="Закрытие тикета"):
@@ -49,6 +41,46 @@ class CloseModal(discord.ui.Modal, title="Закрытие тикета"):
         self.assignee = assignee
 
     async def on_submit(self, interaction: discord.Interaction):
+        # ВАЖНО: Загружаем актуальные данные из БД перед созданием view
+        try:
+            row = get_ticket_by_channel(interaction.channel.id)
+            if row:
+                ticket_id = row["id"]
+                t_type = row["type"]
+                user_id = row["user_id"]
+                
+                # Получаем конфиг типа тикета
+                from .config import TICKET_CONFIG
+                t_cfg = TICKET_CONFIG.get("types", {}).get(t_type, {})
+                type_label = t_cfg.get("label", t_type)
+                
+                # Получаем пользователя
+                author = interaction.guild.get_member(user_id)
+                author_mention = author.mention if author else f"<@{user_id}>"
+                
+                # Парсим form_data из JSON
+                form_fields = {}
+                if row["form_data"]:
+                    try:
+                        form_fields = json.loads(row["form_data"])
+                    except json.JSONDecodeError:
+                        pass
+                
+                # Обновляем ticket_data актуальными данными из БД
+                self.ticket_data = {
+                    "id": ticket_id,
+                    "type": t_type,
+                    "type_label": type_label,
+                    "author": author_mention,
+                    "author_id": user_id,
+                    "description": self.ticket_data.get("description", ""),
+                    "form_fields": form_fields,
+                    "created_at": row["created_at"],
+                    "avatar_url": str(author.display_avatar.url) if author else None,
+                }
+        except Exception as e:
+            print(f"[CLOSE_MODAL] Ошибка загрузки данных: {e}")
+        
         view = ConfirmCloseView(self.ticket_data, self.reason.value, self.assignee)
         await interaction.response.send_message(
             embed=discord.Embed(
@@ -89,6 +121,7 @@ class ConfirmCloseView(discord.ui.View):
         
         try:
             row = get_ticket_by_channel(channel.id)
+            
             if row:
                 ticket_id = row["id"]
                 t_type = row["type"]
@@ -101,22 +134,17 @@ class ConfirmCloseView(discord.ui.View):
                 # Получаем пользователя
                 author = interaction.guild.get_member(user_id)
                 author_mention = author.mention if author else f"<@{user_id}>"
-                
-                print(f"[LOG] Данные тикета из БД: ID={ticket_id}, тип={type_label}, автор={author_mention}")
             else:
-                print(f"[LOG] Тикет не найден в БД для канала {channel.id}")
                 # Fallback на данные из ticket_data
                 ticket_id = self.ticket_data.get("id", 0)
                 type_label = self.ticket_data.get("type_label", "—")
                 author_mention = self.ticket_data.get("author", "—")
-                print(f"[LOG] Fallback данные: ID={ticket_id}, тип={type_label}, автор={author_mention}")
         except Exception as e:
             print(f"[LOG] Ошибка получения данных тикета: {e}")
             # Fallback на данные из ticket_data
             ticket_id = self.ticket_data.get("id", 0)
             type_label = self.ticket_data.get("type_label", "—")
             author_mention = self.ticket_data.get("author", "—")
-            print(f"[LOG] Fallback после ошибки: ID={ticket_id}, тип={type_label}, автор={author_mention}")
 
         if log_channel_id:
             log_channel = interaction.guild.get_channel(log_channel_id)
@@ -131,7 +159,6 @@ class ConfirmCloseView(discord.ui.View):
                         await log_channel.send(embed=embed, file=transcript)
                     else:
                         await log_channel.send(embed=embed)
-                    print(f"[LOG] Лог отправлен: Тикет #{ticket_id}, тип={type_label}")
                 except Exception as e:
                     print(f"[LOG] Ошибка отправки лога: {e}")
 
@@ -245,7 +272,6 @@ class TicketControlView(discord.ui.View):
                     "created_at": row["created_at"],
                     "avatar_url": str(author.display_avatar.url) if author else None,
                 }
-                print(f"[TICKET] Загружены данные из БД: ID={ticket_id}, тип={t_cfg.get('label', t_type)}")
         except Exception as e:
             print(f"[TICKET] Ошибка загрузки ticket_data из БД: {e}")
 
@@ -254,7 +280,7 @@ class TicketControlView(discord.ui.View):
     @discord.ui.button(label="Взять тикет", style=discord.ButtonStyle.success, emoji="🙋", custom_id="ticket_take")
     async def take(self, interaction: discord.Interaction, button: discord.ui.Button):
         td = self._get_data(interaction)
-        if not _is_mod(interaction, td):
+        if not await _is_mod(interaction, td):
             return await interaction.response.send_message(
                 embed=discord.Embed(description="❌ У тебя нет прав брать этот тикет.", color=discord.Color.red()),
                 ephemeral=True
@@ -280,7 +306,7 @@ class TicketControlView(discord.ui.View):
     @discord.ui.button(label="Передать тикет", style=discord.ButtonStyle.primary, emoji="🔄", custom_id="ticket_transfer")
     async def transfer(self, interaction: discord.Interaction, button: discord.ui.Button):
         td = self._get_data(interaction)
-        if not _is_mod(interaction, td):
+        if not await _is_mod(interaction, td):
             return await interaction.response.send_message(
                 embed=discord.Embed(description="❌ У тебя нет прав передавать этот тикет.", color=discord.Color.red()),
                 ephemeral=True
@@ -294,7 +320,7 @@ class TicketControlView(discord.ui.View):
     @discord.ui.button(label="Закрыть тикет", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="ticket_close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         td = self._get_data(interaction)
-        if not _is_mod(interaction, td):
+        if not await _is_mod(interaction, td):
             if td.get("author_id") != interaction.user.id:
                 return await interaction.response.send_message(
                     embed=discord.Embed(description="❌ Только модераторы или автор тикета могут его закрыть.", color=discord.Color.red()),
