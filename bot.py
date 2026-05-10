@@ -10,6 +10,7 @@ COGS = [
     "cogs.tickets.mod_commands",  # Новый cog с командами управления ролями
     "cogs.utils",
     "cogs.reviews",
+    "cogs.surveys.loader",  # Система опросов
 ]
 
 intents = discord.Intents.default()
