@@ -35,9 +35,9 @@ MSG_TEMPLATE = """<div class="message">
 </div>"""
 
 
-async def generate_transcript(channel: discord.TextChannel) -> discord.File:
+async def generate_transcript(channel: discord.TextChannel, limit: int = 1000) -> discord.File:
     messages_html = []
-    async for msg in channel.history(limit=500, oldest_first=True):
+    async for msg in channel.history(limit=limit, oldest_first=True):
         if msg.author.bot and msg.content == "" and not msg.embeds and not msg.attachments:
             continue
         attachments = "".join(

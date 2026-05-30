@@ -1,29 +1,143 @@
 import discord
 import json
-from .transcript import generate_transcript
+from .transcript import generate_transcript, TRANSCRIPT_LIMIT
 from .config import TICKET_CONFIG
 from database import claim_ticket as db_claim_ticket, close_ticket as db_close_ticket, get_ticket_by_channel
 
 
-def build_ticket_embed(ticket_data: dict, status: str, assignee: discord.Member = None) -> discord.Embed:
+# ── Embed helpers ────────────────────────────────────────────────────────────
+
+def _truncate(text: str, limit: int) -> str:
+    """Обрезает текст до лимита с добавлением '...'."""
+    if not text:
+        return text
+    if len(text) <= limit:
+        return text
+    return text[:limit - 3] + "..."
+
+
+def _build_base_embed(ticket_data: dict, status: str, assignee: discord.Member = None) -> discord.Embed:
+    """Создаёт основной embed с базовой информацией."""
     colors = {"открыт": discord.Color.purple(), "в работе": discord.Color.yellow(), "закрыт": discord.Color.red()}
     embed = discord.Embed(title=f"🎫 Тикет #{ticket_data['id']}", color=colors.get(status, discord.Color.blurple()))
     embed.add_field(name="Тип",    value=ticket_data["type_label"], inline=True)
     embed.add_field(name="Статус", value=status,                    inline=True)
     embed.add_field(name="Автор",  value=ticket_data["author"],     inline=True)
+    
     if ticket_data.get("description"):
-        embed.add_field(name="Описание", value=ticket_data["description"], inline=False)
+        embed.add_field(name="Описание", value=_truncate(ticket_data["description"], 1024), inline=False)
     if ticket_data.get("details"):
-        embed.add_field(name="Детали", value=ticket_data["details"], inline=False)
-    for label, value in ticket_data.get("form_fields", {}).items():
-        if value:
-            embed.add_field(name=label, value=value, inline=False)
+        embed.add_field(name="Детали", value=_truncate(ticket_data["details"], 1024), inline=False)
+    
     if assignee:
         embed.add_field(name="Ответственный", value=assignee.mention, inline=True)
     if ticket_data.get("avatar_url"):
         embed.set_thumbnail(url=ticket_data["avatar_url"])
     embed.set_footer(text=f"Создан: {ticket_data['created_at']}")
     return embed
+
+
+def _add_fields_to_embed(embed: discord.Embed, fields: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Добавляет поля в embed пока не достигнет лимита.
+    Возвращает оставшиеся поля которые не влезли."""
+    remaining = []
+    for label, value in fields:
+        if len(embed.fields) >= 25:
+            remaining.append((label, value))
+            continue
+        embed.add_field(name=_truncate(label, 256), value=_truncate(value, 1024), inline=False)
+    return remaining
+
+
+def build_ticket_embeds(ticket_data: dict, status: str, assignee: discord.Member = None) -> list[discord.Embed]:
+    """Создаёт список embed'ов для тикета, разбивая поля на несколько embed'ов при необходимости."""
+    # Основной embed
+    base_embed = _build_base_embed(ticket_data, status, assignee)
+    
+    # Собираем form_fields
+    form_fields = []
+    for label, value in ticket_data.get("form_fields", {}).items():
+        if value:
+            form_fields.append((label, value))
+    
+    if not form_fields:
+        return [base_embed]
+    
+    # Пытаемся добавить form_fields в основной embed
+    remaining = _add_fields_to_embed(base_embed, form_fields)
+    
+    embeds = [base_embed]
+    
+    # Если остались поля - создаём дополнительные embed'ы (макс. 10 на сообщение)
+    while remaining and len(embeds) < 10:
+        extra_embed = discord.Embed(
+            title=f"🎫 Тикет #{ticket_data['id']} (продолжение)",
+            color=base_embed.color
+        )
+        remaining = _add_fields_to_embed(extra_embed, remaining)
+        embeds.append(extra_embed)
+
+    return embeds
+
+
+async def send_ticket_embeds(
+    channel: discord.TextChannel,
+    ticket_data: dict,
+    status: str,
+    assignee: discord.Member = None,
+    view: discord.ui.View = None
+) -> discord.Message:
+    """Отправляет embed'ы тикета в канал. Возвращает основное сообщение (с view)."""
+    embeds = build_ticket_embeds(ticket_data, status, assignee)
+    
+    # Первое сообщение с view
+    main_msg = await channel.send(embeds=embeds[:1], view=view)
+    
+    # Если есть доп. embed'ы - отправляем их отдельными сообщениями
+    for extra_embed in embeds[1:]:
+        await channel.send(embed=extra_embed)
+    
+    return main_msg
+
+
+async def edit_ticket_embeds(
+    channel: discord.TextChannel,
+    ticket_data: dict,
+    status: str,
+    assignee: discord.Member = None,
+    main_msg: discord.Message = None
+) -> None:
+    """Редактирует все embed'ы тикета в канале."""
+    embeds = build_ticket_embeds(ticket_data, status, assignee)
+    
+    # Если передано конкретное сообщение — редактируем его как основное
+    if main_msg and main_msg.author == channel.guild.me:
+        await main_msg.edit(embeds=embeds[:1])
+        # Ищем остальные сообщения бота для удаления
+        bot_messages = []
+        async for msg in channel.history(limit=20, oldest_first=True):
+            if msg.author == channel.guild.me and msg.embeds and msg.id != main_msg.id:
+                bot_messages.append(msg)
+    else:
+        # Находим все сообщения бота с embed'ами
+        bot_messages = []
+        async for msg in channel.history(limit=20, oldest_first=True):
+            if msg.author == channel.guild.me and msg.embeds:
+                if not bot_messages:
+                    # Первое сообщение — редактируем его
+                    await msg.edit(embeds=embeds[:1])
+                bot_messages.append(msg)
+    
+    # Удаляем старые доп. сообщения
+    for msg in bot_messages[1:] if not main_msg else bot_messages:
+        try:
+            await msg.delete()
+        except discord.NotFound:
+            pass
+
+    # Отправляем новые доп. embed'ы если есть
+    for extra_embed in embeds[1:]:
+        await channel.send(embed=extra_embed)
 
 
 def _is_mod(interaction: discord.Interaction, ticket_data: dict = None) -> bool:
@@ -187,13 +301,50 @@ class TransferSelect(discord.ui.UserSelect):
                 embed=discord.Embed(description="❌ Нельзя передать тикет боту.", color=discord.Color.red()),
                 ephemeral=True
             )
-        self.ticket_data["assignee_id"] = new_assignee.id
+        
+        # Загружаем свежие данные из БД
+        try:
+            row = get_ticket_by_channel(interaction.channel.id)
+            if row:
+                t_type = row["type"]
+                t_cfg = TICKET_CONFIG.get("types", {}).get(t_type, {})
+                
+                form_fields = {}
+                if row["form_data"]:
+                    try:
+                        parsed = json.loads(row["form_data"])
+                        if isinstance(parsed, dict):
+                            form_fields = parsed
+                    except json.JSONDecodeError:
+                        pass
+                
+                author = interaction.guild.get_member(row["user_id"])
+                author_mention = author.mention if author else f"<@{row['user_id']}>"
+                
+                td = {
+                    "id": row["id"],
+                    "type": t_type,
+                    "type_label": t_cfg.get("label", t_type),
+                    "author": author_mention,
+                    "author_id": row["user_id"],
+                    "description": self.ticket_data.get("description", ""),
+                    "form_fields": form_fields,
+                    "created_at": row["created_at"],
+                    "avatar_url": str(author.display_avatar.url) if author else None,
+                    "assignee_id": new_assignee.id,
+                }
+            else:
+                # Тикет не найден в БД - используем fallback с новым assignee
+                print(f"[TICKET] Тикет не найден в БД для канала {interaction.channel.id}")
+                td = dict(self.ticket_data)
+                td["assignee_id"] = new_assignee.id
+        except Exception as e:
+            print(f"[TICKET] Ошибка загрузки данных для передачи: {e}")
+            td = dict(self.ticket_data)
+            td["assignee_id"] = new_assignee.id
+        
         self.control_view.assignee = new_assignee
-        embed = build_ticket_embed(self.ticket_data, "в работе", new_assignee)
-        async for msg in interaction.channel.history(limit=10, oldest_first=True):
-            if msg.author == interaction.guild.me and msg.embeds:
-                await msg.edit(embed=embed)
-                break
+        await edit_ticket_embeds(interaction.channel, td, "в работе", new_assignee)
         await interaction.response.send_message(
             embed=discord.Embed(description=f"Тикет передан {new_assignee.mention}.", color=discord.Color.green()),
             ephemeral=True
@@ -222,13 +373,17 @@ class TicketControlView(discord.ui.View):
                 t_type = row["type"]
                 t_cfg = TICKET_CONFIG.get("types", {}).get(t_type, {})
                 
-                # Парсим form_data из JSON
+                # Парсим form_data из JSON с валидацией
                 form_fields = {}
                 if row["form_data"]:
                     try:
-                        form_fields = json.loads(row["form_data"])
-                    except json.JSONDecodeError:
-                        pass
+                        parsed = json.loads(row["form_data"])
+                        if isinstance(parsed, dict):
+                            form_fields = parsed
+                        else:
+                            print(f"[TICKET] form_data имеет неверный тип: {type(parsed)}")
+                    except json.JSONDecodeError as e:
+                        print(f"[TICKET] Ошибка парсинга form_data: {e}")
                 
                 # Получаем пользователя для корректного отображения
                 author = interaction.guild.get_member(row["user_id"])
@@ -267,8 +422,7 @@ class TicketControlView(discord.ui.View):
             )
         self.assignee = interaction.user
         td["assignee_id"] = interaction.user.id
-        embed = build_ticket_embed(td, "в работе", self.assignee)
-        await interaction.message.edit(embed=embed, view=self)
+        await edit_ticket_embeds(interaction.channel, td, "в работе", self.assignee, main_msg=interaction.message)
         try:
             db_claim_ticket(td["id"], interaction.user.id)
         except Exception as e:

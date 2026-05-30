@@ -163,11 +163,12 @@ def close_ticket(ticket_id: int, moderator_id: int, reason: str) -> None:
             "UPDATE tickets SET status='closed', closed_at=?, close_reason=? WHERE id=?",
             (now, reason, ticket_id)
         )
+        # Инкрементируем счётчик закрытых тикетов для АВТОРА тикета
         if row:
             conn.execute(
                 "INSERT INTO users (user_id, tickets_closed) VALUES (?, 1) "
                 "ON CONFLICT(user_id) DO UPDATE SET tickets_closed = tickets_closed + 1",
-                (moderator_id,)
+                (row["user_id"],)
             )
         _log_action(conn, ticket_id, f"closed: {reason}", moderator_id)
 
@@ -238,7 +239,7 @@ def check_cooldown(user_id: int, action_type: str, cooldown_seconds: int) -> Opt
             if remaining > 0:
                 return remaining
         
-        # Обновляем время последнего использования
+        # Кулдаун истёк или нет записи - обновляем время
         conn.execute(
             "INSERT INTO user_cooldowns (user_id, action_type, last_used) VALUES (?, ?, ?) "
             "ON CONFLICT(user_id, action_type) DO UPDATE SET last_used=excluded.last_used",
@@ -476,14 +477,6 @@ def _log_action(conn: sqlite3.Connection, ticket_id: int, action: str, user_id: 
 
 
 # ── Migration from JSON ───────────────────────────────────────────────────────
-
-def migrate_from_json():
-    """Мигрирует старые данные из JSON файлов в SQLite."""
-    import json
-    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-    
-    # Создаем папку data если её нет
-    os.makedirs(data_dir, exist_ok=True)
 
 def migrate_from_json():
     """Мигрирует старые данные из JSON файлов в SQLite."""
