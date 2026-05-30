@@ -125,6 +125,16 @@ def init_surveys_db():
             FOREIGN KEY (question_id) REFERENCES survey_questions(id) ON DELETE CASCADE
         );
 
+        -- Таблица сообщений с опросами
+        CREATE TABLE IF NOT EXISTS survey_messages (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            survey_id       INTEGER NOT NULL,
+            channel_id      INTEGER NOT NULL,
+            message_id      INTEGER NOT NULL,
+            posted_at       TEXT NOT NULL,
+            FOREIGN KEY (survey_id) REFERENCES surveys(id) ON DELETE CASCADE
+        );
+
         -- Индексы для производительности
         CREATE INDEX IF NOT EXISTS idx_surveys_guild ON surveys(guild_id);
         CREATE INDEX IF NOT EXISTS idx_sessions_survey_user ON survey_sessions(survey_id, user_id);
@@ -200,20 +210,8 @@ def update_results_channel(survey_id: int, channel_id: Optional[int]) -> None:
 
 def save_survey_message(survey_id: int, channel_id: int, message_id: int) -> None:
     """Сохраняет ID сообщения с опросом."""
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
     with get_conn() as conn:
-        # Создаем таблицу если не существует
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS survey_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                survey_id INTEGER NOT NULL,
-                channel_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                posted_at TEXT NOT NULL,
-                FOREIGN KEY (survey_id) REFERENCES surveys(id) ON DELETE CASCADE
-            )
-        """)
-        
-        now = datetime.now().strftime("%d.%m.%Y %H:%M")
         conn.execute(
             "INSERT INTO survey_messages (survey_id, channel_id, message_id, posted_at) VALUES (?, ?, ?, ?)",
             (survey_id, channel_id, message_id, now)

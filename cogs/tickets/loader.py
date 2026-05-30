@@ -143,6 +143,8 @@ async def sync_existing_tickets(bot: commands.Bot):
                         ticket_type = "question"
                     elif "предложение" in topic_lower:
                         ticket_type = "suggestion"
+                    elif "другое" in topic_lower:
+                        ticket_type = "other"
                 
                 # Добавляем тикет в БД
                 try:
