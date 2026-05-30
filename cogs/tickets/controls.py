@@ -1,6 +1,6 @@
 import discord
 import json
-from .transcript import generate_transcript, TRANSCRIPT_LIMIT
+from .transcript import generate_transcript
 from .config import TICKET_CONFIG
 from database import claim_ticket as db_claim_ticket, close_ticket as db_close_ticket, get_ticket_by_channel
 
