@@ -64,6 +64,7 @@ CONFIG = {
         "one_active_per_user": True,
         "panel_color": 0x9B59B6,
         "banner_url": "https://cdn.discordapp.com/attachments/1464876491769647277/1493563830712668291/Airbrush-IMAGE-ENHANCER-1776163578743-1776163578743.jpg?ex=69df6d36&is=69de1bb6&hm=eac5c2ee3799cbc19ea3f94ceb99ca9cbb9975916698a6a7ddf6b7524cb040eb&",
+        "transcript_limit": 1000,
     },
     
     # Настройки отзывов

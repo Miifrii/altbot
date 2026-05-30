@@ -6,6 +6,7 @@ TICKET_CONFIG = {
     "panel_message_id": 0,
     "cooldown_seconds": CONFIG["tickets"]["cooldown_seconds"],
     "one_active_per_user": CONFIG["tickets"]["one_active_per_user"],
+    "transcript_limit": CONFIG["tickets"].get("transcript_limit", 1000),
 
     "panel": {
         "color": CONFIG["tickets"]["panel_color"],

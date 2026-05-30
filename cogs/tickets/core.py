@@ -6,15 +6,8 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime
 from .config import TICKET_CONFIG
-from .controls import TicketControlView, build_ticket_embed
+from .controls import TicketControlView, send_ticket_embeds, edit_ticket_embeds
 from database import create_ticket as db_create_ticket, next_ticket_id, check_cooldown, get_active_ticket
-
-
-def _split_text_fields(embed: discord.Embed, name: str, text: str, chunk_size: int = 1024):
-    """Разбивает длинный текст на несколько field'ов."""
-    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-    for idx, chunk in enumerate(chunks):
-        embed.add_field(name=name if idx == 0 else "\u200b", value=chunk, inline=False)
 
 
 def _validate_config():
@@ -115,13 +108,8 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
         print(f"[DB] Ошибка записи тикета: {e}")
         # Не критично - тикет создан, просто не записался в БД
 
-    embed = build_ticket_embed(ticket_data, "открыт")
-    for label, value in fields.items():
-        if value and label != "description":
-            _split_text_fields(embed, label, value)
-
     view = TicketControlView(ticket_data)
-    msg = await channel.send(embed=embed, view=view)
+    msg = await send_ticket_embeds(channel, ticket_data, "открыт", view=view)
     await msg.pin()
 
     followup_text = f"✅ Тикет создан: {channel.mention}"
@@ -155,6 +143,13 @@ class ComplaintModal(discord.ui.Modal, title="🚨 Жалоба"):
             "Содержание жалобы":                             self.content.value,
         })
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        import traceback; traceback.print_exc()
+        try:
+            await interaction.response.send_message(f"❌ Ошибка при создании тикета: `{error}`", ephemeral=True)
+        except Exception:
+            await interaction.followup.send(f"❌ Ошибка: `{error}`", ephemeral=True)
+
 
 class AppealModal(discord.ui.Modal, title="⚖️ Обжалование"):
     punishment = discord.ui.TextInput(label="Тип наказания (перма, джоб, мут и т.д.)", max_length=100)
@@ -177,6 +172,13 @@ class AppealModal(discord.ui.Modal, title="⚖️ Обжалование"):
             "Текст обжалования":                        self.content.value,
         })
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        import traceback; traceback.print_exc()
+        try:
+            await interaction.response.send_message(f"❌ Ошибка при создании тикета: `{error}`", ephemeral=True)
+        except Exception:
+            await interaction.followup.send(f"❌ Ошибка: `{error}`", ephemeral=True)
+
 
 class RescheduleModal(discord.ui.Modal, title="🕐 Перенос времени"):
     ckey  = discord.ui.TextInput(label="Ваш CKEY", max_length=100)
@@ -192,6 +194,13 @@ class RescheduleModal(discord.ui.Modal, title="🕐 Перенос времен�
             "Ваш CKEY":         self.ckey.value,
             "Количество часов": self.hours.value,
         }, extra_msg="📎 Не забудь прикрепить скриншот с наигранными часами в созданный тикет.")
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        import traceback; traceback.print_exc()
+        try:
+            await interaction.response.send_message(f"❌ Ошибка при создании тикета: `{error}`", ephemeral=True)
+        except Exception:
+            await interaction.followup.send(f"❌ Ошибка: `{error}`", ephemeral=True)
 
 
 class VerifyModal(discord.ui.Modal, title="🔞 Верификация возраста"):
@@ -209,6 +218,13 @@ class VerifyModal(discord.ui.Modal, title="🔞 Верификация возр�
             "Ваш возраст": self.age.value,
         })
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        import traceback; traceback.print_exc()
+        try:
+            await interaction.response.send_message(f"❌ Ошибка при создании тикета: `{error}`", ephemeral=True)
+        except Exception:
+            await interaction.followup.send(f"❌ Ошибка: `{error}`", ephemeral=True)
+
 
 class OtherModal(discord.ui.Modal, title="📝 Другое"):
     ckey    = discord.ui.TextInput(label="Ваш CKEY", max_length=100)
@@ -224,6 +240,13 @@ class OtherModal(discord.ui.Modal, title="📝 Другое"):
             "Ваш CKEY":       self.ckey.value,
             "Суть обращения": self.content.value,
         })
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        import traceback; traceback.print_exc()
+        try:
+            await interaction.response.send_message(f"❌ Ошибка при создании тикета: `{error}`", ephemeral=True)
+        except Exception:
+            await interaction.followup.send(f"❌ Ошибка: `{error}`", ephemeral=True)
 
 
 MODAL_MAP = {
