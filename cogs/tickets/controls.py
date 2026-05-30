@@ -135,8 +135,18 @@ class ConfirmCloseView(discord.ui.View):
                 author = interaction.guild.get_member(user_id)
                 author_mention = author.mention if author else f"<@{user_id}>"
             else:
+                # Тикет не найден в БД - пытаемся извлечь ID из имени канала
+                channel_name = channel.name.lower()
+                if channel_name.startswith("ticket-") or channel_name.startswith("тикет-"):
+                    try:
+                        ticket_id = int(channel_name.split("-")[1])
+                        print(f"[TICKETS] Тикет #{ticket_id} не найден в БД, извлечен из имени канала")
+                    except (IndexError, ValueError):
+                        pass
+                
                 # Fallback на данные из ticket_data
-                ticket_id = self.ticket_data.get("id", 0)
+                if ticket_id == 0:
+                    ticket_id = self.ticket_data.get("id", 0)
                 type_label = self.ticket_data.get("type_label", "—")
                 author_mention = self.ticket_data.get("author", "—")
         except Exception as e:
@@ -272,6 +282,61 @@ class TicketControlView(discord.ui.View):
                     "created_at": row["created_at"],
                     "avatar_url": str(author.display_avatar.url) if author else None,
                 }
+            else:
+                # Тикет не найден в БД - пытаемся восстановить данные из канала
+                print(f"[TICKETS] Тикет не найден в БД, попытка восстановления из канала {interaction.channel.name}")
+                
+                channel = interaction.channel
+                channel_name = channel.name.lower()
+                
+                # Извлекаем ID из имени канала
+                ticket_id = 0
+                if channel_name.startswith("ticket-") or channel_name.startswith("тикет-"):
+                    try:
+                        ticket_id = int(channel_name.split("-")[1])
+                    except (IndexError, ValueError):
+                        pass
+                
+                # Определяем тип из топика канала
+                ticket_type = "general"
+                if channel.topic:
+                    topic_lower = channel.topic.lower()
+                    if "жалоба" in topic_lower or "complaint" in topic_lower:
+                        ticket_type = "complaint"
+                    elif "вопрос" in topic_lower or "question" in topic_lower:
+                        ticket_type = "question"
+                    elif "предложение" in topic_lower or "suggestion" in topic_lower:
+                        ticket_type = "suggestion"
+                    elif "другое" in topic_lower or "other" in topic_lower:
+                        ticket_type = "other"
+                
+                t_cfg = TICKET_CONFIG.get("types", {}).get(ticket_type, {})
+                
+                # Ищем автора из permissions канала
+                author_id = None
+                author_mention = "—"
+                for overwrite_target, overwrite in channel.overwrites.items():
+                    if isinstance(overwrite_target, discord.Member):
+                        if overwrite.view_channel:
+                            author_id = overwrite_target.id
+                            author_mention = overwrite_target.mention
+                            break
+                
+                # Обновляем ticket_data с восстановленными данными
+                self.ticket_data = {
+                    "id": ticket_id,
+                    "type": ticket_type,
+                    "type_label": t_cfg.get("label", ticket_type),
+                    "author": author_mention,
+                    "author_id": author_id or 0,
+                    "description": "—",
+                    "form_fields": {},
+                    "created_at": "—",
+                    "avatar_url": None,
+                }
+                
+                print(f"[TICKETS] Восстановлены данные: ID={ticket_id}, тип={ticket_type}, автор={author_id}")
+                
         except Exception as e:
             print(f"[TICKET] Ошибка загрузки ticket_data из БД: {e}")
 

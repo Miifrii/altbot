@@ -125,9 +125,7 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
         # Не критично - тикет создан, просто не записался в БД
 
     embed = build_ticket_embed(ticket_data, "открыт")
-    for label, value in fields.items():
-        if value and label != "description":
-            _split_text_fields(embed, label, value)
+    # Поля уже добавлены в build_ticket_embed из ticket_data["form_fields"]
 
     view = TicketControlView(ticket_data)
     msg = await channel.send(embed=embed, view=view)
