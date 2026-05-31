@@ -103,7 +103,7 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
     }
 
     try:
-        db_create_ticket(ticket_id, guild.id, channel.id, user.id, ticket_type, ticket_data)
+        db_create_ticket(ticket_id, guild.id, channel.id, user.id, ticket_type, fields)
     except Exception as e:
         print(f"[DB] Ошибка записи тикета: {e}")
         # Не критично - тикет создан, просто не записался в БД
