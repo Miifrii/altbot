@@ -198,9 +198,10 @@ class ConfirmCloseView(discord.ui.View):
             transcript = None
 
         # Получаем актуальные данные тикета из БД
-        ticket_id = 0
-        type_label = "—"
-        author_mention = "—"
+        ticket_id = self.ticket_data.get("id", 0)
+        type_label = self.ticket_data.get("type_label", "—")
+        author_id = self.ticket_data.get("author_id")
+        author_mention = self.ticket_data.get("author", "—")
         
         try:
             row = get_ticket_by_channel(channel.id)
@@ -219,18 +220,23 @@ class ConfirmCloseView(discord.ui.View):
                 
                 print(f"[LOG] Данные тикета из БД: ID={ticket_id}, тип={type_label}, автор={author_mention}")
             else:
-                print(f"[LOG] Тикет не найден в БД для канала {channel.id}")
-                # Fallback на данные из ticket_data
-                ticket_id = self.ticket_data.get("id", 0)
-                type_label = self.ticket_data.get("type_label", "—")
-                author_mention = self.ticket_data.get("author", "—")
+                print(f"[LOG] Тикет не найден в БД для канала {channel.id}, используем данные из ticket_data")
+                # Fallback на данные из ticket_data - они уже должны быть заполнены
+                if author_id:
+                    author = interaction.guild.get_member(author_id)
+                    if author:
+                        author_mention = author.mention
                 print(f"[LOG] Fallback данные: ID={ticket_id}, тип={type_label}, автор={author_mention}")
         except Exception as e:
             print(f"[LOG] Ошибка получения данных тикета: {e}")
-            # Fallback на данные из ticket_data
-            ticket_id = self.ticket_data.get("id", 0)
-            type_label = self.ticket_data.get("type_label", "—")
-            author_mention = self.ticket_data.get("author", "—")
+            # Оставляем данные из ticket_data
+            if author_id:
+                try:
+                    author = interaction.guild.get_member(author_id)
+                    if author:
+                        author_mention = author.mention
+                except Exception:
+                    pass
             print(f"[LOG] Fallback после ошибки: ID={ticket_id}, тип={type_label}, автор={author_mention}")
 
         if log_channel_id:
