@@ -64,6 +64,8 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
 
     try:
         category = guild.get_channel(type_cfg["category_id"])
+        if category is None:
+            raise ValueError(f"Категория {type_cfg['category_id']} не найдена")
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
@@ -86,7 +88,15 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
         )
         return
 
-    description = fields.get("description", next(iter(fields.values()), "—"))
+    description = fields.get("description", "")
+    if not description:
+        # Берём первое непустое поле как описание
+        for k, v in fields.items():
+            if k != "description" and v:
+                description = v
+                break
+        if not description:
+            description = "—"
 
     ticket_data = {
         "id": ticket_id,
