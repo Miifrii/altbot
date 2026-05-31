@@ -40,12 +40,19 @@ async def generate_transcript(channel: discord.TextChannel, limit: int = 1000) -
     async for msg in channel.history(limit=limit, oldest_first=True):
         if msg.author.bot and msg.content == "" and not msg.embeds and not msg.attachments:
             continue
+        
+        # Получаем URL аватара с обработкой ошибок
+        try:
+            avatar_url = msg.author.display_avatar.url
+        except Exception:
+            avatar_url = "https://cdn.discordapp.com/embed/avatars/0.png"
+        
         attachments = "".join(
             f'<div class="attachment">📎 <a href="{a.url}" style="color:#00b0f4">{a.filename}</a></div>'
             for a in msg.attachments
         )
         messages_html.append(MSG_TEMPLATE.format(
-            avatar=msg.author.display_avatar.url,
+            avatar=avatar_url,
             author=str(msg.author),
             timestamp=msg.created_at.strftime("%d.%m.%Y %H:%M"),
             text=discord.utils.escape_mentions(msg.content or ""),
