@@ -4,7 +4,9 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 from contextlib import contextmanager
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "bot.db")
+# Проверяем переменную окружения для Railway Volume, иначе используем локальную папку
+DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
+DB_PATH = os.path.join(DATA_DIR, "bot.db")
 
 
 @contextmanager
@@ -25,7 +27,8 @@ def get_conn():
 
 def init_db():
     # Создаем папку data если её нет
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    print(f"[DB] Используем папку для БД: {DATA_DIR}")
     
     with get_conn() as conn:
         conn.executescript("""
@@ -481,9 +484,10 @@ def _log_action(conn: sqlite3.Connection, ticket_id: int, action: str, user_id: 
 def migrate_from_json():
     """Мигрирует старые данные из JSON файлов в SQLite."""
     import json
-    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    # Используем DATA_DIR для Railway, или локальную папку для разработки
+    data_dir = DATA_DIR
     
-    # Создаем папку data если её нет
+    # Создаем папку если её нет
     os.makedirs(data_dir, exist_ok=True)
 
     # Миграция тикетов
