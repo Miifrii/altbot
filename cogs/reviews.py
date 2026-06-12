@@ -6,6 +6,15 @@ from datetime import datetime
 from config import CONFIG
 from database import next_review_id, check_cooldown
 
+
+def _get_review_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    """Получает канал для отзывов из конфига."""
+    channel_id = CONFIG["channels"]["reviews"]
+    if not channel_id:
+        return None
+    return guild.get_channel(channel_id)
+
+
 TYPES = {
     "event":  {"label": "Ивент",         "emoji": "🎉", "color": discord.Color.green()},
     "admin":  {"label": "Администратора", "emoji": "🛡️", "color": discord.Color.blue()},
@@ -29,7 +38,12 @@ def split_text_fields(embed: discord.Embed, name: str, text: str, chunk_size: in
         embed.add_field(name=name if idx == 0 else "\u200b", value=chunk, inline=False)
 
 
-async def send_review(guild: discord.Guild, channel: discord.TextChannel, review_data: dict):
+async def send_review(guild: discord.Guild, review_data: dict):
+    channel = _get_review_channel(guild)
+    if not channel:
+        print("[REVIEWS] Канал для отзывов не найден в конфиге.")
+        return False
+    
     t = TYPES[review_data["type"]]
     review_id = next_review_id(review_data["type"])
     goal = GOALS.get(review_data.get("goal", "feedback"))
@@ -87,8 +101,10 @@ async def send_review(guild: discord.Guild, channel: discord.TextChannel, review
 
     try:
         await channel.send(embed=embed)
+        return True
     except Exception as e:
         print(f"[REVIEWS] Ошибка отправки: {e}")
+        return False
 
 
 # ── Modals ────────────────────────────────────────────────────────────────────
@@ -211,23 +227,15 @@ class GoalView(discord.ui.View):
     async def _send(self, interaction: discord.Interaction, goal: str):
         self.review_data["goal"] = goal
         await interaction.response.defer(ephemeral=True)
-        channel = interaction.guild.get_channel(CONFIG["channels"]["reviews"])
-        if not channel:
-            await interaction.followup.send(
-                embed=discord.Embed(description="❌ Канал для отзывов не найден. Проверь конфигурацию.", color=discord.Color.red()),
-                ephemeral=True
-            )
-            return
-        try:
-            await send_review(interaction.guild, channel, self.review_data)
+        
+        if await send_review(interaction.guild, self.review_data):
             await interaction.followup.send(
                 embed=discord.Embed(description="✅ Ваш отзыв успешно отправлен!", color=discord.Color.green()),
                 ephemeral=True
             )
-        except Exception as e:
-            print(f"[REVIEWS] Ошибка отправки отзыва: {e}")
+        else:
             await interaction.followup.send(
-                embed=discord.Embed(description="❌ Ошибка при отправке отзыва.", color=discord.Color.red()),
+                embed=discord.Embed(description="❌ Ошибка при отправке отзыва. Канал не найден.", color=discord.Color.red()),
                 ephemeral=True
             )
         self.stop()
@@ -254,25 +262,23 @@ class AnonView(discord.ui.View):
         self.review_data["anonymous"] = anonymous
         if self.review_data["type"] in NO_GOAL_TYPES:
             await interaction.response.defer(ephemeral=True)
-            channel = interaction.guild.get_channel(CONFIG["channels"]["reviews"])
-            if not channel:
+            if await send_review(interaction.guild, self.review_data):
+                await interaction.followup.send(
+                    embed=discord.Embed(description="✅ Отправлено!", color=discord.Color.green()),
+                    ephemeral=True
+                )
+            else:
                 await interaction.followup.send(
                     embed=discord.Embed(description="❌ Канал для отзывов не найден.", color=discord.Color.red()),
                     ephemeral=True
                 )
-                return
-            await send_review(interaction.guild, channel, self.review_data)
-            await interaction.followup.send(
-                embed=discord.Embed(description="✅ Отправлено!", color=discord.Color.green()),
-                ephemeral=True
-            )
         else:
             await interaction.response.edit_message(
                 embed=discord.Embed(description="Выберите тональность отзыва:", color=discord.Color.purple()),
                 view=GoalView(self.review_data)
             )
         self.stop()
-
+        
     @discord.ui.button(label="Анонимно", style=discord.ButtonStyle.secondary, emoji="🎭")
     async def anon(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._proceed(interaction, True)

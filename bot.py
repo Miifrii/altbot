@@ -29,6 +29,9 @@ async def on_ready():
         synced = await bot.tree.sync(guild=guild)
         print(f"Синхронизировано {len(synced)} команд для сервера {guild_id}")
 
+    # Регистрируем persistent view для тикетов (данные загрузятся из БД при использовании)
+    bot.add_view(TicketControlView(None))
+
 
 async def main():
     async with bot:

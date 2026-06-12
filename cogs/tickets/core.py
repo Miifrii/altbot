@@ -89,14 +89,6 @@ async def create_ticket_channel(interaction: discord.Interaction, ticket_type: s
         return
 
     description = fields.get("description", "")
-    if not description:
-        # Берём первое непустое поле как описание
-        for k, v in fields.items():
-            if k != "description" and v:
-                description = v
-                break
-        if not description:
-            description = "—"
 
     ticket_data = {
         "id": ticket_id,
@@ -388,10 +380,7 @@ class TicketsCore(commands.Cog):
         self.bot = bot
         _validate_config()
         bot.add_view(TicketPanelView())
-        bot.add_view(TicketControlView({
-            "id": 0, "type": "", "type_label": "",
-            "author": "", "author_id": 0, "description": "", "created_at": ""
-        }))
+        bot.add_view(TicketControlView(None))  # Данные загрузятся из БД при использовании
 
     @app_commands.command(name="panel", description="Отправить панель тикетов (только для администраторов)")
     @app_commands.default_permissions(administrator=True)

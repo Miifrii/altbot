@@ -110,32 +110,34 @@ async def edit_ticket_embeds(
     """Редактирует все embed'ы тикета в канале."""
     embeds = build_ticket_embeds(ticket_data, status, assignee)
     
-    # Если передано конкретное сообщение — редактируем его как основное
+    # Определяем основное сообщение
     if main_msg and main_msg.author == channel.guild.me:
+        # Используем переданное сообщение как основное
         await main_msg.edit(embeds=embeds[:1])
-        # Ищем остальные сообщения бота для удаления
-        bot_messages = []
-        async for msg in channel.history(limit=20, oldest_first=True):
-            if msg.author == channel.guild.me and msg.embeds and msg.id != main_msg.id:
-                bot_messages.append(msg)
+        target_main_id = main_msg.id
     else:
-        # Находим все сообщения бота с embed'ами
-        bot_messages = []
+        # Ищем первое сообщение бота с embed в канале
+        target_main_id = None
         async for msg in channel.history(limit=20, oldest_first=True):
             if msg.author == channel.guild.me and msg.embeds:
-                if not bot_messages:
-                    # Первое сообщение — редактируем его
-                    await msg.edit(embeds=embeds[:1])
-                bot_messages.append(msg)
+                await msg.edit(embeds=embeds[:1])
+                target_main_id = msg.id
+                break
     
-    # Удаляем старые доп. сообщения
-    for msg in bot_messages[1:] if not main_msg else bot_messages:
+    # Собираем все остальные сообщения бота с embed (кроме основного)
+    bot_messages = []
+    async for msg in channel.history(limit=20, oldest_first=True):
+        if msg.author == channel.guild.me and msg.embeds and msg.id != target_main_id:
+            bot_messages.append(msg)
+    
+    # Удаляем старые дополнительные сообщения
+    for msg in bot_messages:
         try:
             await msg.delete()
         except discord.NotFound:
             pass
 
-    # Отправляем новые доп. embed'ы если есть
+    # Отправляем новые дополнительные embed'ы если есть
     for extra_embed in embeds[1:]:
         await channel.send(embed=extra_embed)
 
@@ -316,11 +318,14 @@ class TransferSelect(discord.ui.UserSelect):
                 t_cfg = TICKET_CONFIG.get("types", {}).get(t_type, {})
                 
                 form_fields = {}
+                description = ""
                 if row["form_data"]:
                     try:
                         parsed = json.loads(row["form_data"])
                         if isinstance(parsed, dict):
                             form_fields = parsed
+                            # description — первое значение в form_fields, если ключ "description" пуст
+                            description = parsed.get("description", "")
                     except json.JSONDecodeError:
                         pass
                 
@@ -333,7 +338,7 @@ class TransferSelect(discord.ui.UserSelect):
                     "type_label": t_cfg.get("label", t_type),
                     "author": author_mention,
                     "author_id": row["user_id"],
-                    "description": self.ticket_data.get("description", ""),
+                    "description": description,
                     "form_fields": form_fields,
                     "created_at": row["created_at"],
                     "avatar_url": str(author.display_avatar.url) if author else None,
@@ -365,9 +370,9 @@ class TransferView(discord.ui.View):
 
 
 class TicketControlView(discord.ui.View):
-    def __init__(self, ticket_data: dict):
+    def __init__(self, ticket_data: dict = None):
         super().__init__(timeout=None)
-        self.ticket_data = ticket_data
+        self.ticket_data = ticket_data or {}
         self.assignee: discord.Member = None
 
     def _get_data(self, interaction: discord.Interaction) -> dict:
@@ -381,11 +386,13 @@ class TicketControlView(discord.ui.View):
                 
                 # Парсим form_data из JSON с валидацией
                 form_fields = {}
+                description = ""
                 if row["form_data"]:
                     try:
                         parsed = json.loads(row["form_data"])
                         if isinstance(parsed, dict):
                             form_fields = parsed
+                            description = parsed.get("description", "")
                         else:
                             print(f"[TICKET] form_data имеет неверный тип: {type(parsed)}")
                     except json.JSONDecodeError as e:
@@ -402,20 +409,27 @@ class TicketControlView(discord.ui.View):
                     "type_label": t_cfg.get("label", t_type),
                     "author": author_mention,
                     "author_id": row["user_id"],
-                    "description": self.ticket_data.get("description", ""),
+                    "description": description,
                     "form_fields": form_fields,
                     "created_at": row["created_at"],
                     "avatar_url": str(author.display_avatar.url) if author else None,
                 }
                 print(f"[TICKET] Загружены данные из БД: ID={ticket_id}, тип={t_cfg.get('label', t_type)}")
+                return self.ticket_data
         except Exception as e:
             print(f"[TICKET] Ошибка загрузки ticket_data из БД: {e}")
 
-        return self.ticket_data
+        # Не удалось загрузить данные из БД
+        return None
 
     @discord.ui.button(label="Взять тикет", style=discord.ButtonStyle.success, emoji="🙋", custom_id="ticket_take")
     async def take(self, interaction: discord.Interaction, button: discord.ui.Button):
         td = self._get_data(interaction)
+        if not td:
+            return await interaction.response.send_message(
+                embed=discord.Embed(description="❌ Не удалось загрузить данные тикета.", color=discord.Color.red()),
+                ephemeral=True
+            )
         if not _is_mod(interaction, td):
             return await interaction.response.send_message(
                 embed=discord.Embed(description="❌ У тебя нет прав брать этот тикет.", color=discord.Color.red()),
@@ -441,6 +455,11 @@ class TicketControlView(discord.ui.View):
     @discord.ui.button(label="Передать тикет", style=discord.ButtonStyle.primary, emoji="🔄", custom_id="ticket_transfer")
     async def transfer(self, interaction: discord.Interaction, button: discord.ui.Button):
         td = self._get_data(interaction)
+        if not td:
+            return await interaction.response.send_message(
+                embed=discord.Embed(description="❌ Не удалось загрузить данные тикета.", color=discord.Color.red()),
+                ephemeral=True
+            )
         if not _is_mod(interaction, td):
             return await interaction.response.send_message(
                 embed=discord.Embed(description="❌ У тебя нет прав передавать этот тикет.", color=discord.Color.red()),
@@ -455,6 +474,11 @@ class TicketControlView(discord.ui.View):
     @discord.ui.button(label="Закрыть тикет", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="ticket_close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         td = self._get_data(interaction)
+        if not td:
+            return await interaction.response.send_message(
+                embed=discord.Embed(description="❌ Не удалось загрузить данные тикета.", color=discord.Color.red()),
+                ephemeral=True
+            )
         if not _is_mod(interaction, td):
             if td.get("author_id") != interaction.user.id:
                 return await interaction.response.send_message(

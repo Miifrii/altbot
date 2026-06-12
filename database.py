@@ -161,18 +161,16 @@ def claim_ticket(ticket_id: int, moderator_id: int) -> None:
 def close_ticket(ticket_id: int, moderator_id: int, reason: str) -> None:
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
     with get_conn() as conn:
-        row = conn.execute("SELECT user_id FROM tickets WHERE id=?", (ticket_id,)).fetchone()
         conn.execute(
             "UPDATE tickets SET status='closed', closed_at=?, close_reason=? WHERE id=?",
             (now, reason, ticket_id)
         )
-        # Инкрементируем счётчик закрытых тикетов для АВТОРА тикета
-        if row:
-            conn.execute(
-                "INSERT INTO users (user_id, tickets_closed) VALUES (?, 1) "
-                "ON CONFLICT(user_id) DO UPDATE SET tickets_closed = tickets_closed + 1",
-                (row["user_id"],)
-            )
+        # Инкрементируем счётчик закрытых тикетов для МОДЕРАТОРА
+        conn.execute(
+            "INSERT INTO users (user_id, tickets_closed) VALUES (?, 1) "
+            "ON CONFLICT(user_id) DO UPDATE SET tickets_closed = tickets_closed + 1",
+            (moderator_id,)
+        )
         _log_action(conn, ticket_id, f"closed: {reason}", moderator_id)
 
 
@@ -189,7 +187,7 @@ def get_active_ticket(user_id: int, guild_id: int) -> Optional[sqlite3.Row]:
             "SELECT * FROM tickets WHERE user_id=? AND guild_id=? AND status != 'closed'",
             (user_id, guild_id)
         ).fetchone()
-
+        
 
 def get_ticket(ticket_id: int) -> Optional[sqlite3.Row]:
     with get_conn() as conn:
