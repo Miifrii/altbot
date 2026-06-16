@@ -194,6 +194,41 @@ def get_ticket(ticket_id: int) -> Optional[sqlite3.Row]:
         return conn.execute("SELECT * FROM tickets WHERE id=?", (ticket_id,)).fetchone()
 
 
+def sync_active_tickets(guild_id: int, channel_id: int, user_id: int, 
+                        ticket_id: int, ticket_type: str, created_at: str,
+                        form_data: Dict[str, Any] = None) -> bool:
+    """Добавляет тикет в БД если его там нет. Возвращает True если добавлен."""
+    import json
+    
+    with get_conn() as conn:
+        # Проверяем существует ли уже
+        existing = conn.execute(
+            "SELECT id FROM tickets WHERE channel_id=?", (channel_id,)
+        ).fetchone()
+        
+        if existing:
+            return False
+        
+        # Добавляем новый
+        form_json = json.dumps(form_data or {}, ensure_ascii=False)
+        conn.execute(
+            "INSERT OR IGNORE INTO tickets "
+            "(id, guild_id, channel_id, user_id, type, status, created_at, form_data) "
+            "VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
+            (ticket_id, guild_id, channel_id, user_id, ticket_type, created_at, form_json)
+        )
+        return True
+
+
+def get_all_active_tickets(guild_id: int) -> list[sqlite3.Row]:
+    """Получает все активные (не закрытые) тикеты гильдии."""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM tickets WHERE guild_id=? AND status != 'closed'",
+            (guild_id,)
+        ).fetchall()
+
+
 # ── Counters ──────────────────────────────────────────────────────────────────
 
 def next_ticket_id(ticket_type: str) -> int:

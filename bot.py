@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands
 from config import TOKEN, PREFIX, CONFIG
 from database import init_db, migrate_from_json, init_departments
+from cogs.tickets.controls import TicketControlView
 
 COGS = [
     "cogs.roles",
