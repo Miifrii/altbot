@@ -106,6 +106,7 @@ class TicketsAdmin(commands.Cog):
                     continue
                 
                 ticket_type = prefixes[match.group(1)]
+                t_cfg = TICKET_CONFIG["types"].get(ticket_type, {})
                 
                 # Проверяем есть ли уже в БД
                 existing = get_ticket_by_channel(channel.id)
@@ -113,22 +114,89 @@ class TicketsAdmin(commands.Cog):
                     skipped.append(channel.mention)
                     continue
                 
-                # Пытаемся найти создателя тикета по последним сообщениям
-                user_id = guild.owner_id  # Запасной вариант
+                # Пытаемся извлечь данные из закреплённого сообщения
+                user_id = guild.owner_id
                 created_at = datetime.now().strftime("%d.%m.%Y %H:%M")
                 form_data = {}
+                ticket_id = 0
                 
                 try:
-                    # Берём первое сообщение для определения автора
-                    async for msg in channel.history(limit=1, oldest_first=True):
+                    # Получаем закреплённые сообщения
+                    pinned = await channel.pins()
+                    if pinned:
+                        msg = pinned[0]  # Первое закреплённое (создание тикета)
                         user_id = msg.author.id
                         created_at = msg.created_at.strftime("%d.%m.%Y %H:%M")
-                        break
-                except Exception:
-                    pass
+                        
+                        # Парсим embed'ы для извлечения данных тикета
+                        for embed in msg.embeds:
+                            # Ищем поле "Тип" чтобы подтвердить тип тикета
+                            for field in embed.fields:
+                                if field.name == "Тип":
+                                    ticket_type_from_embed = field.value
+                                    # Пытаемся найти соответствующий тип в конфиге
+                                    for tt, tc in TICKET_CONFIG["types"].items():
+                                        if tc.get("label") == ticket_type_from_embed:
+                                            ticket_type = tt
+                                            t_cfg = tc
+                                            break
+                                
+                                # Извлекаем form_fields из embed
+                                if field.name in t_cfg.get("form_fields", []):
+                                    form_data[field.name] = field.value
+                                elif field.name == "Описание" and field.value and field.value != "\u200b":
+                                    form_data["description"] = field.value
+                                elif field.name == "Ваш CKEY":
+                                    form_data["Ваш CKEY"] = field.value
+                                elif field.name == "Количество часов":
+                                    form_data["Количество часов"] = field.value
+                                elif field.name == "Игровое имя / логин нарушителя в SS14":
+                                    form_data["Игровое имя / логин нарушителя в SS14"] = field.value
+                                elif field.name == "Ваш игровой логин SS14":
+                                    form_data["Ваш игровой логин SS14"] = field.value
+                                elif field.name == "ID раунда или примерное время события":
+                                    form_data["ID раунда или примерное время события"] = field.value
+                                elif field.name == "Номера нарушенных правил":
+                                    form_data["Номера нарушенных правил"] = field.value
+                                elif field.name == "Содержание жалобы":
+                                    form_data["Содержание жалобы"] = field.value
+                                elif field.name == "Тип наказания (перма, джоб, мут и т.д.)":
+                                    form_data["Тип наказания"] = field.value
+                                elif field.name == "Дата / время или ID бана":
+                                    form_data["Дата бана"] = field.value
+                                elif field.name == "Причина бана":
+                                    form_data["Причина бана"] = field.value
+                                elif field.name == "Текст обжалования":
+                                    form_data["Текст обжалования"] = field.value
+                                elif field.name == "Суть обращения":
+                                    form_data["Суть обращения"] = field.value
+                                elif field.name == "Ваш возраст":
+                                    form_data["Ваш возраст"] = field.value
+                        
+                        # Извлекаем ID тикета из заголовка embed "🎫 Тикет #X"
+                        main_embed = msg.embeds[0] if msg.embeds else None
+                        if main_embed and main_embed.title:
+                            import re as re2
+                            id_match = re2.search(r"#(\d+)", main_embed.title)
+                            if id_match:
+                                ticket_id = int(id_match.group(1))
+                        
+                        # Если не нашли ID в embed, используем из имени канала
+                        if ticket_id == 0:
+                            ticket_id = int(match.group(2))
+                    else:
+                        # Нет закреплённых - берём из первого сообщения
+                        async for m in channel.history(limit=1, oldest_first=True):
+                            user_id = m.author.id
+                            created_at = m.created_at.strftime("%d.%m.%Y %H:%M")
+                            ticket_id = int(match.group(2))
+                except Exception as e:
+                    errors.append(f"{channel.mention}: Ошибка парсинга: {e}")
+                    ticket_id = int(match.group(2))  # Fallback
                 
-                # Генерируем ID тикета
-                ticket_id = next_ticket_id(ticket_type)
+                # Если form_data пустой, добавляем минимальные данные
+                if not form_data:
+                    form_data = {"description": f"Тикет синхронизирован {datetime.now().strftime('%d.%m.%Y')}"}
                 
                 try:
                     if sync_active_tickets(guild.id, channel.id, user_id, ticket_id, ticket_type, created_at, form_data):
@@ -155,6 +223,51 @@ class TicketsAdmin(commands.Cog):
             embed.color = discord.Color.orange()
         
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="clear_tickets_db", description="Очистить таблицу tickets (ОСТОРОЖНО! Только для администраторов)")
+    @app_commands.default_permissions(administrator=True)
+    async def clear_tickets_db(self, interaction: discord.Interaction):
+        """Удаляет все записи из таблицы tickets. Используйте перед повторной синхронизацией."""
+        from database import get_conn
+
+        view = ClearConfirmView()
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description="⚠️ **Вы уверены?** Это удалит ВСЕ записи о тикетах из базы данных!\n\nЭто действие нельзя отменить.",
+                color=discord.Color.red()
+            ),
+            view=view,
+            ephemeral=True
+        )
+
+
+class ClearConfirmView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=30)
+    
+    @discord.ui.button(label="✅ Подтвердить очистку", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from database import get_conn
+        try:
+            with get_conn() as conn:
+                conn.execute("DELETE FROM tickets")
+                conn.execute("DELETE FROM ticket_actions")
+            await interaction.response.edit_message(
+                embed=discord.Embed(description="✅ База данных очищена. Теперь запустите `/sync_tickets`", color=discord.Color.green()),
+                view=None
+            )
+        except Exception as e:
+            await interaction.response.edit_message(
+                embed=discord.Embed(description=f"❌ Ошибка: {e}", color=discord.Color.red()),
+                view=None
+            )
+    
+    @discord.ui.button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=discord.Embed(description="Операция отменена.", color=discord.Color.light_grey()),
+            view=None
+        )
 
 
 async def setup_admin(bot: commands.Bot):
